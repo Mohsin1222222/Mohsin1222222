@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SubSync Studio — مزامنة الترجمة مع الفيديو</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">⏱</span>
+      <div>
+        <h1>SubSync Studio</h1>
+        <p>مزامنة دقيقة للترجمات مع أي نسخة فيديو</p>
+      </div>
+    </div>
+    <div id="health" class="health"></div>
+  </header>
+
+  <main>
+    <section class="card" id="inputs">
+      <h2>1. اختر الملفات</h2>
+      <div class="grid">
+        <label class="drop" id="drop-video">
+          <input type="file" id="file-video" accept="video/*" hidden />
+          <strong>🎞 الفيديو</strong>
+          <small>اختياري إن استخدمت ترجمة مرجعية. مدعومة كل الصيغ.</small>
+          <span class="filename" id="name-video">لم يُختر ملف</span>
+        </label>
+
+        <label class="drop" id="drop-sub">
+          <input type="file" id="file-sub" accept=".srt,.ass,.ssa,.vtt,.sub" hidden />
+          <strong>📝 الترجمة المراد مزامنتها</strong>
+          <small>SRT / ASS / VTT / SUB</small>
+          <span class="filename" id="name-sub">لم يُختر ملف</span>
+        </label>
+
+        <label class="drop" id="drop-ref">
+          <input type="file" id="file-ref" accept=".srt,.ass,.ssa,.vtt,.sub" hidden />
+          <strong>📚 ترجمة مرجعية</strong>
+          <small>اختياري — تستخدم عند عدم رفع فيديو.</small>
+          <span class="filename" id="name-ref">لم يُختر ملف</span>
+        </label>
+      </div>
+
+      <details class="advanced">
+        <summary>🔍 أو ابحث في OpenSubtitles</summary>
+        <div class="search-row">
+          <input id="search-q" type="text" placeholder="اسم الفيلم/المسلسل (مثال: Inception 2010)" />
+          <input id="search-langs" type="text" value="en,ar" title="رموز اللغات" />
+          <button id="btn-search">بحث</button>
+        </div>
+        <div id="search-results" class="search-results"></div>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>2. ابدأ المزامنة</h2>
+      <div class="actions">
+        <button id="btn-sync" class="primary">⚡ مزامنة الآن</button>
+        <select id="output-format">
+          <option value="srt">SRT</option>
+          <option value="ass">ASS</option>
+          <option value="vtt">VTT</option>
+        </select>
+        <span id="status" class="status"></span>
+      </div>
+      <div id="method-info" class="info hidden"></div>
+    </section>
+
+    <section class="card hidden" id="preview-card">
+      <h2>3. معاينة الفيديو مع الترجمة</h2>
+      <div class="player-wrap">
+        <video id="player" controls crossorigin="anonymous"></video>
+      </div>
+      <p class="hint">يمكنك تشغيل الفيديو هنا للتحقق من تطابق الترجمة طوال الحلقة/الفيلم.</p>
+    </section>
+
+    <section class="card hidden" id="editor-card">
+      <h2>4. تعديل يدوي للتوقيتات</h2>
+      <div class="editor-actions">
+        <button id="btn-shift-back">−500ms للكل</button>
+        <button id="btn-shift-fwd">+500ms للكل</button>
+        <button id="btn-save" class="primary">💾 حفظ التعديلات</button>
+        <a id="btn-download" class="btn-link" download>⬇️ تحميل الملف</a>
+      </div>
+      <div class="table-wrap">
+        <table id="cues-table">
+          <thead>
+            <tr><th>#</th><th>البداية</th><th>النهاية</th><th>النص</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <small>مبني على ffsubsync + FastAPI. التعرّف على الكلام عبر تحليل الموجة الصوتية يعطي مزامنة دقيقة على طول الفيديو.</small>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
