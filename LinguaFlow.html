@@ -1309,7 +1309,7 @@ function WritingTab({ words }) {
       <div style={T.card}>
         <h2 style={T.h2}>تدريبات الكتابة</h2>
         <div style={{ ...T.muted, marginTop: '4px', marginBottom: '12px' }}>
-          مهارة الكتابة تتطور بالكمية + التغذية الراجعة. ثلاثة أساليب مكمّلة:
+          مهارة الكتابة تتطور بالكمية + التغذية الراجعة. أربعة أساليب مكمّلة:
         </div>
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
           <button onClick={() => setMode('essay')} style={btn(mode === 'essay' ? 'amber' : 'secondary', 'sm')}>
@@ -1321,11 +1321,268 @@ function WritingTab({ words }) {
           <button onClick={() => setMode('paraphrase')} style={btn(mode === 'paraphrase' ? 'amber' : 'secondary', 'sm')}>
             <RefreshCw size={14} /> إعادة صياغة
           </button>
+          <button onClick={() => setMode('challenge')} style={btn(mode === 'challenge' ? 'amber' : 'secondary', 'sm')}>
+            <Languages size={14} /> تحدّي ترجمة
+          </button>
         </div>
       </div>
       {mode === 'essay' && <EssayMode words={words} />}
       {mode === 'builder' && <BuilderMode words={words} />}
       {mode === 'paraphrase' && <ParaphraseMode />}
+      {mode === 'challenge' && <TranslationChallengeMode />}
+    </div>
+  );
+}
+
+function TranslationChallengeMode() {
+  const [domain, setDomain] = useState('daily');
+  const [difficulty, setDifficulty] = useState('medium');
+  const [prompt, setPrompt] = useState(null);
+  const [userText, setUserText] = useState('');
+  const [evalRes, setEvalRes] = useState(null);
+  const [loadingPrompt, setLoadingPrompt] = useState(false);
+  const [loadingEval, setLoadingEval] = useState(false);
+  const [err, setErr] = useState('');
+  const [showModel, setShowModel] = useState(false);
+
+  const difficulties = [
+    { id: 'easy',   ar: 'سهل (جملة)' },
+    { id: 'medium', ar: 'متوسط (2-3 جمل)' },
+    { id: 'hard',   ar: 'صعب (فقرة)' },
+  ];
+
+  const newPrompt = async () => {
+    setLoadingPrompt(true); setErr(''); setEvalRes(null); setUserText(''); setShowModel(false);
+    try {
+      const d = DOMAIN_MAP[domain] || DOMAIN_MAP.daily;
+      const lengthHint = difficulty === 'easy'
+        ? 'one Arabic sentence (12-18 words)'
+        : difficulty === 'medium'
+          ? 'a short Arabic passage of 2-3 sentences (35-55 words)'
+          : 'a cohesive Arabic paragraph (75-100 words)';
+      const p =
+`Generate ${lengthHint} in the "${d.en}" context, suitable for a B2+ Arabic learner
+to translate INTO English. The Arabic should sound natural (not translation-ese)
+and include domain-specific phrasing or idiom when possible.
+
+Return ONLY JSON (no fences, no commentary):
+{
+  "arabic": "النص العربي الذي يجب ترجمته للإنجليزية",
+  "hintAr": "تلميح قصير بالعربية عن نقطة لغوية يجب الانتباه لها",
+  "trickyTerms": [{"ar":"...","hintEn":"how to render in English"}]
+}`;
+      const text = await callAI(p, null, 1000);
+      const obj = extractJSON(text);
+      if (!obj || !obj.arabic) throw new Error('parse');
+      setPrompt(obj);
+    } catch (e) {
+      if (e.code === 'NO_API_KEY') setErr('أدخل مفتاح API من زر الإعدادات');
+      else if (e.code === 'INVALID_KEY') setErr('مفتاح API غير صالح');
+      else setErr('تعذّر توليد نص — حاول مجدداً');
+    } finally { setLoadingPrompt(false); }
+  };
+
+  const evaluate = async () => {
+    if (!userText.trim() || !prompt) return;
+    setLoadingEval(true); setErr(''); setEvalRes(null); setShowModel(false);
+    try {
+      const d = DOMAIN_MAP[domain] || DOMAIN_MAP.daily;
+      const p =
+`You are evaluating an Arabic→English translation by a B2+ learner.
+Domain context: ${d.en}.
+
+Source Arabic:
+"""
+${prompt.arabic}
+"""
+
+Learner's English translation:
+"""
+${userText.trim()}
+"""
+
+Judge: accuracy of meaning, grammatical correctness, naturalness/idiomatic flow,
+and register fit for the ${d.en} domain.
+
+Return ONLY JSON (no fences):
+{
+  "score": 0-100,
+  "accuracy": 0-100,
+  "grammar": 0-100,
+  "naturalness": 0-100,
+  "registerFit": 0-100,
+  "overallAr": "تقييم شامل بالعربية",
+  "corrections": [
+    {"original":"the exact English phrase from learner","corrected":"better English","noteAr":"شرح بالعربية"}
+  ],
+  "missedNuancesAr": ["فروق دقيقة في المعنى ضاعت أو لم تُنقَل"],
+  "modelTranslation": "an excellent B2+ English translation",
+  "encouragementAr": "رسالة تشجيعية قصيرة بالعربية"
+}`;
+      const text = await callAI(p, null, 2000);
+      const obj = extractJSON(text);
+      if (!obj) throw new Error('parse');
+      setEvalRes(obj);
+    } catch (e) {
+      if (e.code === 'NO_API_KEY') setErr('أدخل مفتاح API من زر الإعدادات');
+      else if (e.code === 'INVALID_KEY') setErr('مفتاح API غير صالح');
+      else setErr('تعذّر التقييم — حاول مجدداً');
+    } finally { setLoadingEval(false); }
+  };
+
+  return (
+    <div style={T.card}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+        <h2 style={T.h2}>تحدّي الترجمة (عربي → إنجليزي)</h2>
+        <button onClick={newPrompt} disabled={loadingPrompt} style={btn('amber', 'sm')}>
+          {loadingPrompt ? <Spinner size={14} /> : <Sparkles size={14} />} نص جديد
+        </button>
+      </div>
+      <div style={{ ...T.muted, marginTop: '4px', marginBottom: '12px' }}>
+        تمرين عكسي يجبرك على إنتاج الإنجليزية بدل التعرّف عليها — أقوى أنواع تدريب الكتابة.
+      </div>
+
+      <div style={{ marginBottom: '10px' }}>
+        <div style={T.label}>السياق</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+          {DOMAINS.map(d => {
+            const I = d.icon;
+            return (
+              <button key={d.id} onClick={() => setDomain(d.id)} style={btn(domain === d.id ? 'amber' : 'secondary', 'sm')}>
+                <I size={12} /> {d.ar}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{ marginBottom: '12px' }}>
+        <div style={T.label}>الصعوبة</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+          {difficulties.map(d => (
+            <button key={d.id} onClick={() => setDifficulty(d.id)} style={btn(difficulty === d.id ? 'amber' : 'secondary', 'sm')}>
+              {d.ar}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {prompt && (
+        <div style={{ ...T.cardInner, background: AMBER.bg, borderColor: AMBER.border, marginBottom: '12px' }}>
+          <div style={{ ...T.label, color: AMBER.text }}>النص العربي المطلوب ترجمته</div>
+          <div style={{ color: AMBER.text, fontSize: '15px', lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>
+            {prompt.arabic}
+          </div>
+          {prompt.hintAr && (
+            <div style={{ marginTop: '8px', color: AMBER.text, fontSize: '13px' }}>
+              💡 {prompt.hintAr}
+            </div>
+          )}
+          {prompt.trickyTerms && prompt.trickyTerms.length > 0 && (
+            <div style={{ marginTop: '10px' }}>
+              <div style={{ ...T.label, color: AMBER.text }}>مصطلحات قد تكون صعبة</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {prompt.trickyTerms.map((t, i) => (
+                  <span key={i} style={pill('amber')} title={t.hintEn}>{t.ar}</span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <label style={T.label}>ترجمتك بالإنجليزية</label>
+      <textarea
+        dir="ltr"
+        style={{ ...T.textarea, ...T.english }}
+        value={userText}
+        onChange={e => setUserText(e.target.value)}
+        placeholder="Type your English translation here..."
+      />
+
+      <div style={{ marginTop: '10px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+        <button onClick={evaluate} disabled={!userText.trim() || !prompt || loadingEval} style={btn('primary', 'md')}>
+          {loadingEval ? <Spinner size={14} /> : <Send size={14} />} قيّم الترجمة
+        </button>
+        {prompt && (
+          <button onClick={() => speak(userText)} disabled={!userText.trim()} style={btn('amber', 'md')}>
+            <Volume2 size={14} /> استمع لترجمتي
+          </button>
+        )}
+      </div>
+
+      {err && <div style={{ color: 'var(--color-text-danger, #B91C1C)', marginTop: '10px', fontSize: '13px' }}>{err}</div>}
+
+      {evalRes && (
+        <div style={{ marginTop: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div style={{ ...T.cardInner, textAlign: 'center', background: AMBER.bg, borderColor: AMBER.border }}>
+            <div style={{ fontSize: '34px', fontWeight: 800, color: AMBER.text }}>{evalRes.score}/100</div>
+            <div style={{ color: AMBER.text, marginTop: '4px' }}>{evalRes.overallAr}</div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '8px' }}>
+            {[
+              ['accuracy', 'الدقة'],
+              ['grammar', 'القواعد'],
+              ['naturalness', 'الانسيابية'],
+              ['registerFit', 'مناسبة السجل'],
+            ].map(([k, label]) => (
+              <div key={k} style={{ ...T.cardInner, textAlign: 'center' }}>
+                <div style={{ ...T.muted, fontSize: '12px' }}>{label}</div>
+                <div style={{ fontSize: '22px', fontWeight: 700, color: AMBER.text }}>{evalRes[k] ?? '-'}</div>
+              </div>
+            ))}
+          </div>
+
+          {evalRes.corrections && evalRes.corrections.length > 0 && (
+            <div style={T.cardInner}>
+              <div style={T.label}>تصحيحات</div>
+              {evalRes.corrections.map((c, i) => (
+                <div key={i} style={{ marginBottom: '10px', paddingBottom: '10px', borderBottom: '1px dashed var(--color-border-primary, #e5e5e5)' }}>
+                  <div dir="ltr" style={{ color: 'var(--color-text-danger, #B91C1C)', textDecoration: 'line-through', fontFamily: 'Georgia, serif' }}>{c.original}</div>
+                  <div dir="ltr" style={{ color: 'var(--color-text-success, #157A42)', fontFamily: 'Georgia, serif' }}>{c.corrected}</div>
+                  <div style={{ ...T.muted, marginTop: '4px' }}>{c.noteAr}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {evalRes.missedNuancesAr && evalRes.missedNuancesAr.length > 0 && (
+            <div style={{ ...T.cardInner, background: 'var(--color-background-info, #E0F2FF)', borderColor: 'var(--color-text-info, #0369A1)' }}>
+              <div style={{ ...T.label, color: 'var(--color-text-info, #0369A1)' }}>فروق دقيقة فاتت</div>
+              <ul style={{ color: 'var(--color-text-info, #0369A1)', margin: 0, paddingInlineStart: '20px' }}>
+                {evalRes.missedNuancesAr.map((m, i) => <li key={i} style={{ marginBottom: '4px' }}>{m}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {evalRes.modelTranslation && (
+            <div style={T.cardInner}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                <div style={T.label}>ترجمة نموذجية</div>
+                <button onClick={() => setShowModel(s => !s)} style={btn('ghost', 'sm')}>
+                  {showModel ? <EyeOff size={12} /> : <Eye size={12} />}
+                  {showModel ? ' أخفِ' : ' اكشف'}
+                </button>
+              </div>
+              {showModel && (
+                <>
+                  <div dir="ltr" style={{ ...T.english, fontStyle: 'italic', lineHeight: 1.7 }}>{evalRes.modelTranslation}</div>
+                  <button onClick={() => speak(evalRes.modelTranslation)} style={{ ...btn('amber', 'sm'), marginTop: '6px' }}>
+                    <Volume2 size={12} /> استمع
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
+          {evalRes.encouragementAr && (
+            <div style={{ ...T.cardInner, background: 'var(--color-background-success, #E7F6EA)', borderColor: 'var(--color-text-success, #157A42)' }}>
+              <div style={{ color: 'var(--color-text-success, #157A42)' }}>{evalRes.encouragementAr}</div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
