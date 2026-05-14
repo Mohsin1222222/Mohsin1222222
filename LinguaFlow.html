@@ -1093,12 +1093,30 @@ function WordOfDay({ words, settings, saveSettings, onSave }) {
     setLoading(true); setErr('');
     try {
       const knownWords = (words || []).slice(-30).map(w => w.word);
-      const domainHint = DOMAINS[new Date().getDate() % DOMAINS.length].en;
+      const recentHistory = (settings.wodHistory || []).slice(0, 14);
+      const recentDomains = recentHistory.map(h => h.domain);
+      const recentItems = recentHistory.map(h => h.word);
+      // Score each domain by how UNDERrepresented it is in recent history
+      const counts = Object.fromEntries(DOMAINS.map(d => [d.id, 0]));
+      recentDomains.forEach(d => { if (counts[d] != null) counts[d]++; });
+      const sorted = DOMAINS.slice().sort((a, b) => counts[a.id] - counts[b.id]);
+      // Pick from the 3 least-used domains, with a tiny date jitter
+      const candidates = sorted.slice(0, 3);
+      const pick = candidates[(new Date().getDate() + Math.floor(Math.random() * candidates.length)) % candidates.length];
+      const domainHint = pick.en;
+      const allowedRegisters = pick.id === 'academic'
+        ? 'academic, formal, neutral'
+        : 'neutral, informal, formal (NOT academic unless the domain truly demands it)';
       const prompt =
 `Generate ONE useful English word OR multi-word phrase for an Arabic-speaking B2+ learner.
-Vary the domain — today bias toward: "${domainHint}".
-Avoid these recently-seen items: ${JSON.stringify(knownWords)}.
-Prefer everyday-practical items used in real conversation, news, or work.
+
+STRICT requirements:
+- Domain MUST be: "${pick.id}" (${domainHint}). Do NOT default to academic unless the chosen domain is academic.
+- Register should be ${allowedRegisters}. Prefer items a real person actually says/writes daily in that domain.
+- Avoid abstract academic-flavored nouns unless the domain is academic.
+- Pick something a B2 learner would realistically encounter on TV, in work emails, in a hospital, courtroom, conversation, etc. — not glossary jargon.
+
+Avoid these recently-seen items: ${JSON.stringify([...knownWords, ...recentItems])}.
 
 Return ONLY a JSON object with this exact schema (no markdown, no commentary):
 {
@@ -1108,7 +1126,7 @@ Return ONLY a JSON object with this exact schema (no markdown, no commentary):
   "definition": "simple B2 English definition",
   "pronunciation": "IPA",
   "register": "formal|informal|neutral|academic|legal|medical|business",
-  "domain": "daily|business|legal|medical|academic|military|political|economic|news|technology",
+  "domain": "${pick.id}",
   "examples": [{"en":"...","ar":"..."},{"en":"...","ar":"..."},{"en":"...","ar":"..."}],
   "collocations": ["...","...","...","..."],
   "speakingTip": "نصيحة بالعربية لاستخدامه شفهياً",
@@ -1119,7 +1137,12 @@ Return ONLY a JSON object with this exact schema (no markdown, no commentary):
       const text = await callAI(prompt);
       const obj = extractJSON(text);
       if (!obj || !obj.word) throw new Error('parse');
-      await saveSettings({ ...settings, wodDate: today, wod: obj });
+      if (!obj.domain) obj.domain = pick.id;
+      const newHistory = [
+        { word: obj.word, domain: obj.domain || pick.id, date: today },
+        ...recentHistory,
+      ].slice(0, 14);
+      await saveSettings({ ...settings, wodDate: today, wod: obj, wodHistory: newHistory });
     } catch (e) {
       setErr('تعذّر جلب كلمة اليوم — حاول مجدداً');
     } finally { setLoading(false); }
@@ -2638,7 +2661,7 @@ function SpeakingTab({ words }) {
       <div style={T.card}>
         <h2 style={T.h2}>تدريب التحدث</h2>
         <div style={{ ...T.muted, marginTop: '4px', marginBottom: '12px' }}>
-          المحادثة تتحسّن بثلاث طرق: تقليد (shadowing)، تقييم النطق، ومحادثة سيناريو.
+          المحادثة تتحسّن بخمس طرق: تقليد، تقييم نطق، أصوات متقاربة، سيناريو، ومقابلة محاكاة.
         </div>
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
           <button onClick={() => setMode('shadow')} style={btn(mode === 'shadow' ? 'amber' : 'secondary', 'sm')}>
@@ -2647,14 +2670,587 @@ function SpeakingTab({ words }) {
           <button onClick={() => setMode('pron')} style={btn(mode === 'pron' ? 'amber' : 'secondary', 'sm')}>
             <Mic size={14} /> تقييم النطق
           </button>
+          <button onClick={() => setMode('minpairs')} style={btn(mode === 'minpairs' ? 'amber' : 'secondary', 'sm')}>
+            <Zap size={14} /> أزواج صوتية
+          </button>
           <button onClick={() => setMode('convo')} style={btn(mode === 'convo' ? 'amber' : 'secondary', 'sm')}>
             <MessageCircle size={14} /> سيناريو محادثة
+          </button>
+          <button onClick={() => setMode('interview')} style={btn(mode === 'interview' ? 'amber' : 'secondary', 'sm')}>
+            <Briefcase size={14} /> مقابلة محاكاة
           </button>
         </div>
       </div>
       {mode === 'shadow' && <ShadowingMode words={words} />}
       {mode === 'pron' && <PronunciationMode words={words} />}
+      {mode === 'minpairs' && <MinimalPairsMode />}
       {mode === 'convo' && <ConversationMode />}
+      {mode === 'interview' && <MockInterviewMode />}
+    </div>
+  );
+}
+
+/* ---------- Minimal Pairs ---------- */
+const PHONEME_GROUPS = [
+  { id: 'p-b',  ar: '/p/ مقابل /b/',  en: '/p/ vs /b/',  hintAr: 'العربية تنطق p كـ b — اشدّ شفتيك دون اهتزاز.' },
+  { id: 'v-f',  ar: '/v/ مقابل /f/',  en: '/v/ vs /f/',  hintAr: 'v بشفة سفلى مع اهتزاز خفيف، f بدون اهتزاز.' },
+  { id: 'th',   ar: '/θ/ مقابل /ð/',  en: '/θ/ vs /ð/',  hintAr: 'ضع طرف اللسان بين الأسنان: θ بدون صوت (think)، ð بصوت (this).' },
+  { id: 'i-ii', ar: '/ɪ/ مقابل /iː/', en: '/ɪ/ vs /iː/', hintAr: 'ɪ قصيرة مرتخية (ship)، iː ممدودة مشدودة (sheep).' },
+  { id: 'ae-e', ar: '/æ/ مقابل /e/',  en: '/æ/ vs /e/',  hintAr: 'æ أوسع وأطول (cat)، e أقصر (bed).' },
+  { id: 's-z',  ar: '/s/ مقابل /z/',  en: '/s/ vs /z/',  hintAr: 'z تهتز فيها الحبال الصوتية، s لا.' },
+];
+
+function MinimalPairsMode() {
+  const [groupId, setGroupId] = useState('p-b');
+  const [pairs, setPairs] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState('');
+  const [submode, setSubmode] = useState('listen');
+  const group = PHONEME_GROUPS.find(g => g.id === groupId);
+
+  // Listen-mode state
+  const [quizIdx, setQuizIdx] = useState(0);
+  const [played, setPlayed] = useState(null);
+  const [userAnswer, setUserAnswer] = useState(null);
+  const [score, setScore] = useState({ correct: 0, total: 0 });
+
+  // Speak-mode state
+  const [target, setTarget] = useState(null);
+  const [transcript, setTranscript] = useState('');
+  const [listening, setListening] = useState(false);
+  const [speakResult, setSpeakResult] = useState(null);
+  const recRef = useRef(null);
+  const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+
+  const fetchPairs = async () => {
+    setLoading(true); setErr(''); setPairs([]); setPlayed(null); setUserAnswer(null); setScore({ correct: 0, total: 0 }); setQuizIdx(0); setTarget(null); setTranscript(''); setSpeakResult(null);
+    try {
+      const prompt =
+`Give 8 minimal pairs that target the contrast ${group.en} for an Arabic-speaking learner.
+Each pair must differ ONLY by the target phoneme. Avoid pairs with multiple phoneme differences.
+
+Return ONLY JSON:
+{
+  "pairs": [
+    {"a":"word with first sound","b":"word with second sound","sentenceA":"a short sentence using A","sentenceB":"a short sentence using B"},
+    ...
+  ]
+}`;
+      const t = await callAI(prompt, null, 1500);
+      const obj = extractJSON(t);
+      if (!obj || !Array.isArray(obj.pairs)) throw new Error('parse');
+      setPairs(obj.pairs.slice(0, 8));
+    } catch (e) {
+      if (e.code === 'NO_API_KEY') setErr('أدخل مفتاح API من زر الإعدادات');
+      else if (e.code === 'INVALID_KEY') setErr('مفتاح API غير صالح');
+      else setErr('تعذّر جلب الأزواج');
+    } finally { setLoading(false); }
+  };
+
+  useEffect(() => { fetchPairs(); /* eslint-disable-next-line */ }, [groupId]);
+  useEffect(() => () => { try { recRef.current?.stop(); } catch {} }, []);
+
+  // ------- Listen submode helpers -------
+  const playRandom = () => {
+    if (!pairs[quizIdx]) return;
+    const pick = Math.random() < 0.5 ? 'a' : 'b';
+    setPlayed(pick); setUserAnswer(null);
+    speak(pairs[quizIdx][pick], 'en-US', 0.85);
+  };
+  const answer = (pick) => {
+    if (!played || userAnswer) return;
+    setUserAnswer(pick);
+    setScore(s => ({ correct: s.correct + (pick === played ? 1 : 0), total: s.total + 1 }));
+  };
+  const nextQuiz = () => {
+    setPlayed(null); setUserAnswer(null);
+    setQuizIdx(i => Math.min(i + 1, pairs.length - 1));
+  };
+
+  // ------- Speak submode helpers -------
+  const pickSpeakTarget = (word) => {
+    setTarget(word); setTranscript(''); setSpeakResult(null);
+    setTimeout(() => speak(word, 'en-US', 0.85), 100);
+  };
+  const startSpeak = () => {
+    if (!SR || !target) return;
+    setTranscript(''); setSpeakResult(null);
+    const c = createRecognitionController({
+      lang: 'en-US',
+      onText: (t) => setTranscript(prev => (prev ? prev + ' ' : '') + t),
+      onInterim: () => {},
+      onError: (msg) => msg && setErr(msg),
+      onState: setListening,
+    });
+    if (!c) return;
+    recRef.current = c; c.start();
+  };
+  const stopSpeak = () => { try { recRef.current?.stop(); } catch {} setListening(false); };
+  const checkSpeak = () => {
+    if (!transcript || !target) return;
+    const heard = transcript.toLowerCase().split(/\s+/);
+    const want = target.toLowerCase();
+    const matched = heard.includes(want);
+    setSpeakResult({ matched, heard: transcript.trim() });
+  };
+
+  const curPair = pairs[quizIdx];
+  const accuracy = score.total > 0 ? Math.round((score.correct / score.total) * 100) : 0;
+
+  return (
+    <div style={T.card}>
+      <MicNotice />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+        <h2 style={T.h2}>الأزواج الصوتية</h2>
+        <button onClick={fetchPairs} disabled={loading} style={btn('amber', 'sm')}>
+          {loading ? <Spinner size={14} /> : <RefreshCw size={14} />} أزواج جديدة
+        </button>
+      </div>
+      <div style={{ ...T.muted, marginTop: '4px', marginBottom: '10px' }}>
+        تدريب على الأصوات التي يخلطها الناطق العربي. اختر الزوج، ثم استمع وميّز، أو انطق وتحقق.
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
+        {PHONEME_GROUPS.map(g => (
+          <button key={g.id} onClick={() => setGroupId(g.id)} style={btn(groupId === g.id ? 'amber' : 'secondary', 'sm')}>
+            {g.ar}
+          </button>
+        ))}
+      </div>
+
+      {group && (
+        <div style={{ ...T.cardInner, background: AMBER.bg, borderColor: AMBER.border, marginBottom: '10px' }}>
+          <div style={{ color: AMBER.text, fontSize: '13px' }}>💡 {group.hintAr}</div>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '10px' }}>
+        <button onClick={() => setSubmode('listen')} style={btn(submode === 'listen' ? 'amber' : 'secondary', 'sm')}>
+          <Headphones size={14} /> استمع وميّز
+        </button>
+        <button onClick={() => setSubmode('speak')} style={btn(submode === 'speak' ? 'amber' : 'secondary', 'sm')}>
+          <Mic size={14} /> انطق وتحقق
+        </button>
+      </div>
+
+      {err && <div style={{ color: 'var(--color-text-danger, #B91C1C)', marginBottom: '8px', fontSize: '13px' }}>{err}</div>}
+
+      {pairs.length === 0 && loading && <div style={T.muted}>جاري تحضير الأزواج...</div>}
+
+      {pairs.length > 0 && submode === 'listen' && curPair && (
+        <div>
+          <div style={{ ...T.muted, marginBottom: '6px' }}>
+            ({quizIdx + 1} / {pairs.length}) — الدقة: {accuracy}% ({score.correct}/{score.total})
+          </div>
+          <div style={{ ...T.cardInner, textAlign: 'center', marginBottom: '10px' }}>
+            <button onClick={playRandom} style={btn('primary', 'lg')}>
+              <Volume2 size={16} /> شغّل كلمة واحدة
+            </button>
+            <div style={{ ...T.muted, marginTop: '6px', fontSize: '12px' }}>سأشغّل إحدى الكلمتين عشوائياً — أيّ واحدة سمعت؟</div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            {['a', 'b'].map(k => {
+              const word = curPair[k];
+              let variant = 'secondary';
+              if (userAnswer) {
+                if (k === played) variant = 'success';
+                else if (k === userAnswer) variant = 'danger';
+              } else if (played) variant = 'amber';
+              return (
+                <button key={k} onClick={() => answer(k)} disabled={!played || !!userAnswer}
+                  style={{ ...btn(variant, 'md'), flexDirection: 'column', padding: '14px' }}>
+                  <span dir="ltr" style={{ ...T.english, fontSize: '20px', fontWeight: 700 }}>{word}</span>
+                </button>
+              );
+            })}
+          </div>
+          {userAnswer && (
+            <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={pill(userAnswer === played ? 'success' : 'danger')}>
+                {userAnswer === played ? '✓ صحيح' : `✗ كان الصوت: ${curPair[played]}`}
+              </div>
+              {curPair.sentenceA && (
+                <div style={T.cardInner}>
+                  <div dir="ltr" style={{ ...T.english, fontSize: '13px' }}>{curPair.sentenceA}</div>
+                  <button onClick={() => speak(curPair.sentenceA)} style={{ ...btn('ghost', 'sm'), marginTop: '4px' }}>
+                    <Volume2 size={12} /> A
+                  </button>
+                </div>
+              )}
+              {curPair.sentenceB && (
+                <div style={T.cardInner}>
+                  <div dir="ltr" style={{ ...T.english, fontSize: '13px' }}>{curPair.sentenceB}</div>
+                  <button onClick={() => speak(curPair.sentenceB)} style={{ ...btn('ghost', 'sm'), marginTop: '4px' }}>
+                    <Volume2 size={12} /> B
+                  </button>
+                </div>
+              )}
+              <button onClick={nextQuiz} disabled={quizIdx >= pairs.length - 1} style={btn('primary', 'md')}>
+                التالي
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {pairs.length > 0 && submode === 'speak' && (
+        <div>
+          <div style={{ ...T.muted, marginBottom: '6px' }}>اختر الكلمة المستهدفة، استمع لها، ثم اضغط الميكروفون وانطقها.</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '10px' }}>
+            {pairs.map((p, i) => (
+              <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                {['a', 'b'].map(k => (
+                  <button key={k} onClick={() => pickSpeakTarget(p[k])}
+                    style={btn(target === p[k] ? 'amber' : 'secondary', 'sm')}>
+                    <span dir="ltr" style={T.english}>{p[k]}</span>
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+          {target && (
+            <div style={{ ...T.cardInner, marginBottom: '10px' }}>
+              <div style={T.label}>الكلمة المستهدفة</div>
+              <div dir="ltr" style={{ ...T.english, fontSize: '20px', fontWeight: 700 }}>{target}</div>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '8px' }}>
+                <button onClick={() => speak(target, 'en-US', 0.7)} style={btn('amber', 'sm')}>
+                  <Volume2 size={14} /> استمع بطيء
+                </button>
+                {!listening ? (
+                  <button onClick={startSpeak} disabled={!SR} style={btn('danger', 'sm')}>
+                    <Mic size={14} /> ابدأ التسجيل
+                  </button>
+                ) : (
+                  <button onClick={stopSpeak} style={btn('primary', 'sm')}>
+                    <MicOff size={14} /> أوقف
+                  </button>
+                )}
+                <button onClick={checkSpeak} disabled={!transcript} style={btn('success', 'sm')}>
+                  <Check size={14} /> تحقق
+                </button>
+              </div>
+              {transcript && (
+                <div style={{ ...T.muted, marginTop: '8px' }}>سُمع منك: <span dir="ltr" style={T.english}>{transcript}</span></div>
+              )}
+              {speakResult && (
+                <div style={{ marginTop: '8px' }}>
+                  <span style={pill(speakResult.matched ? 'success' : 'danger')}>
+                    {speakResult.matched ? '✓ نُطقت بشكل صحيح' : '✗ لم يُتعرّف عليها — جرّب أبطأ وأوضح'}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Mock Interview ---------- */
+const INTERVIEW_SCENARIOS = [
+  { id: 'legal',    ar: 'مقابلة قانونية (طالب/متدرّب)', en: 'legal trainee/clerkship interview' },
+  { id: 'business', ar: 'مقابلة عمل عامة',              en: 'general business/job interview' },
+  { id: 'visa',     ar: 'مقابلة فيزا/سفارة',            en: 'visa or embassy interview' },
+  { id: 'academic', ar: 'مقابلة قبول جامعي',            en: 'university admission interview' },
+  { id: 'media',    ar: 'مقابلة صحفية',                  en: 'press interview' },
+];
+
+function MockInterviewMode() {
+  const [scenarioId, setScenarioId] = useState('legal');
+  const [intro, setIntro] = useState(null);
+  const [history, setHistory] = useState([]); // {role:'ai'|'user', text, tip?, score?}
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [err, setErr] = useState('');
+  const [summary, setSummary] = useState(null);
+  const [loadingSummary, setLoadingSummary] = useState(false);
+  const recRef = useRef(null);
+  const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+
+  useEffect(() => () => { try { recRef.current?.stop(); } catch {} stopSpeaking(); }, []);
+
+  const startInterview = async () => {
+    setLoading(true); setErr(''); setIntro(null); setHistory([]); setSummary(null); setInput('');
+    try {
+      const sc = INTERVIEW_SCENARIOS.find(s => s.id === scenarioId);
+      const prompt =
+`You are roleplaying an interviewer for a B2+ Arabic learner.
+Scenario: ${sc.en}.
+Start the interview formally. Give:
+- A 1-sentence English greeting + role context.
+- The FIRST question (open-ended, realistic for this scenario).
+
+Return ONLY JSON:
+{
+  "introEn": "greeting + context in English",
+  "introAr": "الترجمة العربية للترحيب والسياق",
+  "firstQuestionEn": "the first interview question in English",
+  "firstQuestionAr": "الترجمة العربية للسؤال",
+  "evaluationCriteriaAr": ["معيار 1","معيار 2","معيار 3"]
+}`;
+      const t = await callAI(prompt, null, 1200);
+      const obj = extractJSON(t);
+      if (!obj) throw new Error('parse');
+      setIntro(obj);
+      const firstMsg = { role: 'ai', text: obj.firstQuestionEn, textAr: obj.firstQuestionAr };
+      setHistory([firstMsg]);
+      speak(obj.firstQuestionEn);
+    } catch (e) {
+      if (e.code === 'NO_API_KEY') setErr('أدخل مفتاح API من زر الإعدادات');
+      else if (e.code === 'INVALID_KEY') setErr('مفتاح API غير صالح');
+      else setErr('تعذّر بدء المقابلة');
+    } finally { setLoading(false); }
+  };
+
+  const send = async () => {
+    if (!input.trim() || loading || !intro) return;
+    const userMsg = { role: 'user', text: input.trim() };
+    const next = [...history, userMsg];
+    setHistory(next);
+    setInput('');
+    setLoading(true);
+    try {
+      const sc = INTERVIEW_SCENARIOS.find(s => s.id === scenarioId);
+      const dialog = next.map(m => `${m.role === 'ai' ? 'INTERVIEWER' : 'CANDIDATE'}: ${m.text}`).join('\n');
+      const turnNum = next.filter(m => m.role === 'user').length;
+      const isFinal = turnNum >= 5;
+      const prompt =
+`You are the interviewer in a ${sc.en}. Conversation so far:
+${dialog}
+
+${isFinal
+  ? 'This was the candidate\'s 5th answer — give a brief CLOSING remark in English (no new question).'
+  : 'Ask the NEXT natural follow-up question in English, building on the candidate\'s last answer (1-2 sentences max).'}
+Also evaluate the candidate's LAST answer (relevance, English clarity, register fit, content depth).
+
+Return ONLY JSON:
+{
+  "nextEn": "${isFinal ? 'closing remark in English' : 'next interview question in English'}",
+  "nextAr": "الترجمة العربية",
+  "turnScore": 0-100,
+  "turnFeedbackAr": "تغذية راجعة قصيرة بالعربية على الإجابة الأخيرة",
+  "finished": ${isFinal ? 'true' : 'false'}
+}`;
+      const t = await callAI(prompt, null, 1500);
+      const obj = extractJSON(t);
+      if (!obj) throw new Error('parse');
+      const aiMsg = {
+        role: 'ai',
+        text: obj.nextEn,
+        textAr: obj.nextAr,
+        prevScore: obj.turnScore,
+        prevFeedback: obj.turnFeedbackAr,
+        finished: obj.finished,
+      };
+      setHistory([...next, aiMsg]);
+      speak(obj.nextEn);
+      if (obj.finished) buildSummary([...next, aiMsg]);
+    } catch (e) {
+      if (e.code === 'NO_API_KEY') setErr('أدخل مفتاح API من زر الإعدادات');
+      else if (e.code === 'INVALID_KEY') setErr('مفتاح API غير صالح');
+      else setErr('تعذّر الرد');
+    } finally { setLoading(false); }
+  };
+
+  const buildSummary = async (final) => {
+    setLoadingSummary(true);
+    try {
+      const dialog = final.map(m => `${m.role === 'ai' ? 'INTERVIEWER' : 'CANDIDATE'}: ${m.text}`).join('\n');
+      const sc = INTERVIEW_SCENARIOS.find(s => s.id === scenarioId);
+      const prompt =
+`Full ${sc.en} transcript:
+${dialog}
+
+Provide a final structured evaluation for the candidate.
+
+Return ONLY JSON:
+{
+  "overallScore": 0-100,
+  "clarity": 0-100,
+  "content": 0-100,
+  "registerFit": 0-100,
+  "fluency": 0-100,
+  "strengthsAr": ["...","..."],
+  "improvementsAr": ["...","..."],
+  "topPhrasesEn": ["3-5 better phrases the candidate could have used","..."],
+  "encouragementAr": "رسالة تشجيع قصيرة بالعربية"
+}`;
+      const t = await callAI(prompt, null, 1500);
+      const obj = extractJSON(t);
+      if (obj) setSummary(obj);
+    } catch {} finally { setLoadingSummary(false); }
+  };
+
+  const startRec = () => {
+    if (!SR) { setErr('التعرف على الصوت غير مدعوم'); return; }
+    setErr('');
+    const buf = { final: input };
+    const c = createRecognitionController({
+      lang: 'en-US',
+      onText: (t) => { buf.final = (buf.final ? buf.final + ' ' : '') + t; setInput(buf.final.trim()); },
+      onInterim: (t) => setInput((buf.final + (t ? ' ' + t : '')).trim()),
+      onError: (msg) => msg && setErr(msg),
+      onState: setListening,
+    });
+    if (!c) return;
+    recRef.current = c; c.start();
+  };
+  const stopRec = () => { try { recRef.current?.stop(); } catch {} setListening(false); };
+
+  return (
+    <div style={T.card}>
+      <MicNotice />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+        <h2 style={T.h2}>مقابلة محاكاة</h2>
+        <button onClick={startInterview} disabled={loading} style={btn('amber', 'sm')}>
+          {loading ? <Spinner size={14} /> : <Sparkles size={14} />} ابدأ مقابلة جديدة
+        </button>
+      </div>
+      <div style={{ ...T.muted, marginTop: '4px', marginBottom: '10px' }}>
+        ٥ أسئلة + تقييم لحظي بعد كل جواب + ملخص نهائي شامل.
+      </div>
+
+      <div style={{ marginBottom: '10px' }}>
+        <div style={T.label}>السيناريو</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+          {INTERVIEW_SCENARIOS.map(s => (
+            <button key={s.id} onClick={() => setScenarioId(s.id)} disabled={history.length > 0 && !summary}
+              style={btn(scenarioId === s.id ? 'amber' : 'secondary', 'sm')}>
+              {s.ar}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {intro && (
+        <div style={{ ...T.cardInner, background: AMBER.bg, borderColor: AMBER.border, marginBottom: '10px' }}>
+          <div dir="ltr" style={{ ...T.english, fontSize: '14px' }}>{intro.introEn}</div>
+          <div style={{ color: AMBER.text, fontSize: '13px', marginTop: '4px' }}>{intro.introAr}</div>
+          {intro.evaluationCriteriaAr && intro.evaluationCriteriaAr.length > 0 && (
+            <div style={{ marginTop: '8px' }}>
+              <div style={{ ...T.label, color: AMBER.text }}>سيتم تقييمك على:</div>
+              <ul style={{ color: AMBER.text, margin: 0, paddingInlineStart: '20px', fontSize: '12px' }}>
+                {intro.evaluationCriteriaAr.map((c, i) => <li key={i}>{c}</li>)}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      {history.length > 0 && (
+        <div style={{ maxHeight: '360px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
+          {history.map((m, i) => (
+            <div key={i} style={{
+              ...T.cardInner,
+              alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
+              maxWidth: '85%',
+              background: m.role === 'user' ? 'var(--color-background-info, #E0F2FF)' : AMBER.bg,
+              borderColor: m.role === 'user' ? 'var(--color-text-info, #0369A1)' : AMBER.border,
+            }}>
+              <div dir="ltr" style={T.english}>{m.text}</div>
+              {m.textAr && <div style={{ ...T.muted, marginTop: '4px', fontSize: '12px' }}>{m.textAr}</div>}
+              {m.role === 'ai' && (
+                <button onClick={() => speak(m.text)} style={{ ...btn('ghost', 'sm'), marginTop: '4px', padding: '2px 6px' }}>
+                  <Volume2 size={12} />
+                </button>
+              )}
+              {m.prevScore != null && (
+                <div style={{ marginTop: '6px', paddingTop: '6px', borderTop: '1px dashed' }}>
+                  <span style={pill(m.prevScore >= 70 ? 'success' : m.prevScore >= 50 ? 'amber' : 'danger')}>
+                    إجابتك السابقة: {m.prevScore}/100
+                  </span>
+                  {m.prevFeedback && <div style={{ ...T.muted, marginTop: '4px', fontSize: '12px' }}>{m.prevFeedback}</div>}
+                </div>
+              )}
+            </div>
+          ))}
+          {loading && <div style={T.muted}><Spinner size={14} /> يفكّر...</div>}
+        </div>
+      )}
+
+      {intro && !summary && (
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+          <input
+            dir="ltr"
+            style={{ ...T.input, ...T.english, flex: 1, minWidth: '200px' }}
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            placeholder="Answer in English..."
+            onKeyDown={e => { if (e.key === 'Enter') send(); }}
+            disabled={loading}
+          />
+          {SR && (!listening ? (
+            <button onClick={startRec} style={btn('danger', 'md')}><Mic size={14} /></button>
+          ) : (
+            <button onClick={stopRec} style={btn('primary', 'md')}><MicOff size={14} /></button>
+          ))}
+          <button onClick={send} disabled={!input.trim() || loading} style={btn('primary', 'md')}>
+            <Send size={14} />
+          </button>
+        </div>
+      )}
+
+      {err && <div style={{ color: 'var(--color-text-danger, #B91C1C)', marginTop: '8px', fontSize: '13px' }}>{err}</div>}
+
+      {loadingSummary && <div style={{ ...T.muted, marginTop: '10px' }}><Spinner size={14} /> يحضّر الملخص النهائي...</div>}
+
+      {summary && (
+        <div style={{ marginTop: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div style={{ ...T.cardInner, textAlign: 'center', background: AMBER.bg, borderColor: AMBER.border }}>
+            <div style={{ ...T.label, color: AMBER.text }}>التقييم النهائي</div>
+            <div style={{ fontSize: '36px', fontWeight: 800, color: AMBER.text }}>{summary.overallScore}/100</div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '8px' }}>
+            {[
+              ['clarity', 'الوضوح'],
+              ['content', 'المحتوى'],
+              ['registerFit', 'مناسبة السجل'],
+              ['fluency', 'الانسيابية'],
+            ].map(([k, label]) => (
+              <div key={k} style={{ ...T.cardInner, textAlign: 'center' }}>
+                <div style={{ ...T.muted, fontSize: '12px' }}>{label}</div>
+                <div style={{ fontSize: '22px', fontWeight: 700, color: AMBER.text }}>{summary[k] ?? '-'}</div>
+              </div>
+            ))}
+          </div>
+          {summary.strengthsAr && summary.strengthsAr.length > 0 && (
+            <div style={{ ...T.cardInner, background: 'var(--color-background-success, #E7F6EA)', borderColor: 'var(--color-text-success, #157A42)' }}>
+              <div style={{ ...T.label, color: 'var(--color-text-success, #157A42)' }}>نقاط قوة</div>
+              <ul style={{ color: 'var(--color-text-success, #157A42)', margin: 0, paddingInlineStart: '20px' }}>
+                {summary.strengthsAr.map((s, i) => <li key={i}>{s}</li>)}
+              </ul>
+            </div>
+          )}
+          {summary.improvementsAr && summary.improvementsAr.length > 0 && (
+            <div style={{ ...T.cardInner, background: 'var(--color-background-info, #E0F2FF)', borderColor: 'var(--color-text-info, #0369A1)' }}>
+              <div style={{ ...T.label, color: 'var(--color-text-info, #0369A1)' }}>تحسينات</div>
+              <ul style={{ color: 'var(--color-text-info, #0369A1)', margin: 0, paddingInlineStart: '20px' }}>
+                {summary.improvementsAr.map((s, i) => <li key={i}>{s}</li>)}
+              </ul>
+            </div>
+          )}
+          {summary.topPhrasesEn && summary.topPhrasesEn.length > 0 && (
+            <div style={T.cardInner}>
+              <div style={T.label}>عبارات أفضل كنت تقدر تستخدمها</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {summary.topPhrasesEn.map((p, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+                    <span dir="ltr" style={T.english}>{p}</span>
+                    <button onClick={() => speak(p)} style={btn('ghost', 'sm')}><Volume2 size={12} /></button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {summary.encouragementAr && (
+            <div style={{ ...T.cardInner, background: AMBER.bg, borderColor: AMBER.border }}>
+              <div style={{ color: AMBER.text }}>{summary.encouragementAr}</div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -3028,7 +3624,220 @@ Return ONLY JSON:
 /* ============================================================
    Listening Tab
 ============================================================ */
+/* ---------- Smart Dictation ---------- */
+function SmartDictationMode() {
+  const [difficulty, setDifficulty] = useState('medium');
+  const [item, setItem] = useState(null); // { sentence, ar }
+  const [userText, setUserText] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [evalRes, setEvalRes] = useState(null);
+  const [evalLoading, setEvalLoading] = useState(false);
+  const [err, setErr] = useState('');
+  const [rate, setRate] = useState(0.85);
+  const [showAnswer, setShowAnswer] = useState(false);
+
+  const DIFF = {
+    easy:   { ar: 'سهل',   en: 'a short clear English sentence (8-14 words, B1-B2)' },
+    medium: { ar: 'متوسط', en: 'a natural English sentence (14-22 words, B2)' },
+    hard:   { ar: 'صعب',   en: 'a complex English sentence with subordinate clauses (22-32 words, B2+)' },
+  };
+
+  const fetchItem = async () => {
+    setLoading(true); setErr(''); setItem(null); setUserText(''); setEvalRes(null); setShowAnswer(false);
+    try {
+      const prompt =
+`Generate ONE ${DIFF[difficulty].en} suitable for an English dictation exercise for an Arabic-speaking B2+ learner.
+Pick a topic from: news, daily life, business, legal, medical, academic.
+Avoid extremely uncommon proper nouns.
+
+Return ONLY JSON:
+{ "sentence": "the English sentence", "ar": "الترجمة العربية", "hintAr": "تلميح قصير عن الكلمات الصعبة" }`;
+      const t = await callAI(prompt, null, 800);
+      const obj = extractJSON(t);
+      if (!obj || !obj.sentence) throw new Error('parse');
+      setItem(obj);
+      setTimeout(() => speak(obj.sentence, 'en-US', rate), 250);
+    } catch (e) {
+      if (e.code === 'NO_API_KEY') setErr('أدخل مفتاح API من زر الإعدادات');
+      else if (e.code === 'INVALID_KEY') setErr('مفتاح API غير صالح');
+      else setErr('تعذّر توليد جملة');
+    } finally { setLoading(false); }
+  };
+
+  const evaluate = async () => {
+    if (!item || !userText.trim()) return;
+    setEvalLoading(true); setErr(''); setEvalRes(null);
+    try {
+      const prompt =
+`Dictation evaluation.
+
+Target sentence (what was spoken):
+"""
+${item.sentence}
+"""
+
+Learner typed:
+"""
+${userText.trim()}
+"""
+
+Score the dictation. Be strict on missing/wrong words; lenient on minor capitalization
+or trailing punctuation. Score word-level accuracy.
+
+Return ONLY JSON:
+{
+  "score": 0-100,
+  "wordAccuracy": 0-100,
+  "punctuation": 0-100,
+  "spelling": 0-100,
+  "missed": ["target words that the learner missed or got wrong"],
+  "extras": ["words the learner added that weren't in the target"],
+  "feedbackAr": "تغذية راجعة قصيرة بالعربية: ما الكلمات/الأصوات التي يحتاج التركيز عليها",
+  "diffAr": "وصف عربي موجز للفرق"
+}`;
+      const t = await callAI(prompt, null, 1500);
+      const obj = extractJSON(t);
+      if (!obj) throw new Error('parse');
+      setEvalRes(obj);
+    } catch (e) {
+      if (e.code === 'NO_API_KEY') setErr('أدخل مفتاح API من زر الإعدادات');
+      else if (e.code === 'INVALID_KEY') setErr('مفتاح API غير صالح');
+      else setErr('تعذّر التقييم');
+    } finally { setEvalLoading(false); }
+  };
+
+  useEffect(() => () => stopSpeaking(), []);
+
+  return (
+    <div style={T.card}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+        <h2 style={T.h2}>الإملاء الذكي</h2>
+        <button onClick={fetchItem} disabled={loading} style={btn('amber', 'sm')}>
+          {loading ? <Spinner size={14} /> : <Sparkles size={14} />} جملة جديدة
+        </button>
+      </div>
+      <div style={{ ...T.muted, marginTop: '4px', marginBottom: '10px' }}>
+        استمع، اكتب ما سمعت، ثم احصل على تقييم بدقة الكلمات والإملاء.
+      </div>
+
+      <div style={{ marginBottom: '10px' }}>
+        <div style={T.label}>الصعوبة</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+          {Object.entries(DIFF).map(([id, info]) => (
+            <button key={id} onClick={() => setDifficulty(id)} style={btn(difficulty === id ? 'amber' : 'secondary', 'sm')}>
+              {info.ar}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {item && (
+        <div style={{ ...T.cardInner, background: AMBER.bg, borderColor: AMBER.border, marginBottom: '10px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px', marginBottom: '6px' }}>
+            <div style={{ color: AMBER.text, fontWeight: 700 }}>الاستماع</div>
+            <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+              <span style={{ ...T.muted, color: AMBER.text, fontSize: '12px' }}>السرعة:</span>
+              {[0.65, 0.85, 1.0].map(r => (
+                <button key={r} onClick={() => setRate(r)} style={btn(rate === r ? 'amber' : 'ghost', 'sm')}>
+                  {r === 0.65 ? 'بطيء' : r === 0.85 ? 'متوسط' : 'طبيعي'}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            <button onClick={() => speak(item.sentence, 'en-US', rate)} style={btn('primary', 'md')}>
+              <Play size={14} /> شغّل
+            </button>
+            <button onClick={stopSpeaking} style={btn('secondary', 'md')}>
+              <Square size={14} /> أوقف
+            </button>
+            <button onClick={() => setShowAnswer(s => !s)} style={btn('ghost', 'sm')}>
+              {showAnswer ? <EyeOff size={14} /> : <Eye size={14} />} {showAnswer ? 'أخفِ الإجابة' : 'اكشف الإجابة'}
+            </button>
+          </div>
+          {item.hintAr && (
+            <div style={{ marginTop: '8px', color: AMBER.text, fontSize: '12px' }}>💡 {item.hintAr}</div>
+          )}
+          {showAnswer && (
+            <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px dashed' }}>
+              <div dir="ltr" style={{ ...T.english, color: AMBER.text }}>{item.sentence}</div>
+              <div style={{ color: AMBER.text, fontSize: '12px', marginTop: '4px' }}>{item.ar}</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div>
+        <label style={T.label}>اكتب ما سمعت</label>
+        <textarea
+          dir="ltr"
+          style={{ ...T.textarea, ...T.english, minHeight: '110px' }}
+          value={userText}
+          onChange={e => setUserText(e.target.value)}
+          placeholder="Type the sentence you heard..."
+          disabled={!item}
+        />
+      </div>
+
+      <div style={{ marginTop: '10px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+        <button onClick={evaluate} disabled={!item || !userText.trim() || evalLoading} style={btn('primary', 'md')}>
+          {evalLoading ? <Spinner size={14} /> : <Send size={14} />} قيّم
+        </button>
+      </div>
+
+      {err && <div style={{ color: 'var(--color-text-danger, #B91C1C)', marginTop: '10px', fontSize: '13px' }}>{err}</div>}
+
+      {evalRes && (
+        <div style={{ marginTop: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div style={{ ...T.cardInner, textAlign: 'center', background: AMBER.bg, borderColor: AMBER.border }}>
+            <div style={{ fontSize: '34px', fontWeight: 800, color: AMBER.text }}>{evalRes.score}/100</div>
+            <div style={{ color: AMBER.text, marginTop: '4px' }}>{evalRes.diffAr}</div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '8px' }}>
+            {[
+              ['wordAccuracy', 'دقة الكلمات'],
+              ['spelling', 'الإملاء'],
+              ['punctuation', 'الترقيم'],
+            ].map(([k, label]) => (
+              <div key={k} style={{ ...T.cardInner, textAlign: 'center' }}>
+                <div style={{ ...T.muted, fontSize: '12px' }}>{label}</div>
+                <div style={{ fontSize: '22px', fontWeight: 700, color: AMBER.text }}>{evalRes[k] ?? '-'}</div>
+              </div>
+            ))}
+          </div>
+          {evalRes.missed && evalRes.missed.length > 0 && (
+            <div style={{ ...T.cardInner, background: 'var(--color-background-danger, #FCE7E7)', borderColor: 'var(--color-text-danger, #B91C1C)' }}>
+              <div style={{ ...T.label, color: 'var(--color-text-danger, #B91C1C)' }}>كلمات فاتت</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                {evalRes.missed.map((w, i) => (
+                  <span key={i} dir="ltr" style={{ ...pill('danger'), ...T.english }}>{w}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          {evalRes.extras && evalRes.extras.length > 0 && (
+            <div style={T.cardInner}>
+              <div style={T.label}>كلمات إضافية لم تكن في الأصل</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                {evalRes.extras.map((w, i) => (
+                  <span key={i} dir="ltr" style={{ ...pill('neutral'), ...T.english }}>{w}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          {evalRes.feedbackAr && (
+            <div style={{ ...T.cardInner, background: 'var(--color-background-info, #E0F2FF)', borderColor: 'var(--color-text-info, #0369A1)' }}>
+              <div style={{ color: 'var(--color-text-info, #0369A1)' }}>{evalRes.feedbackAr}</div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ListeningTab() {
+  const [submode, setSubmode] = useState('comprehension');
   const [domain, setDomain] = useState('daily');
   const [content, setContent] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -3077,25 +3886,39 @@ Return ONLY JSON:
       <div style={T.card}>
         <h2 style={T.h2}>تدريب الاستماع</h2>
         <div style={{ ...T.muted, marginTop: '4px', marginBottom: '12px' }}>
-          استمع مرة بدون نص، حاول الإجابة، ثم اكشف النص للمقارنة (تعلّم لاواعي للنبر والإيقاع).
+          وضعان: استيعاب (مقطع + أسئلة) أو إملاء ذكي (سمع → كتابة → تقييم).
         </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
-          {DOMAINS.map(d => {
-            const I = d.icon;
-            return (
-              <button key={d.id} onClick={() => setDomain(d.id)} style={btn(domain === d.id ? 'amber' : 'secondary', 'sm')}>
-                <I size={12} /> {d.ar}
-              </button>
-            );
-          })}
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '10px' }}>
+          <button onClick={() => setSubmode('comprehension')} style={btn(submode === 'comprehension' ? 'amber' : 'secondary', 'sm')}>
+            <Headphones size={14} /> استيعاب
+          </button>
+          <button onClick={() => setSubmode('dictation')} style={btn(submode === 'dictation' ? 'amber' : 'secondary', 'sm')}>
+            <PenLine size={14} /> إملاء ذكي
+          </button>
         </div>
-        <button onClick={fetchListening} disabled={loading} style={btn('primary', 'md')}>
-          {loading ? <Spinner size={14} /> : <Sparkles size={14} />} توليد مقطع
-        </button>
-        {err && <div style={{ color: 'var(--color-text-danger, #B91C1C)', marginTop: '8px', fontSize: '13px' }}>{err}</div>}
+        {submode === 'comprehension' && (
+          <>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
+              {DOMAINS.map(d => {
+                const I = d.icon;
+                return (
+                  <button key={d.id} onClick={() => setDomain(d.id)} style={btn(domain === d.id ? 'amber' : 'secondary', 'sm')}>
+                    <I size={12} /> {d.ar}
+                  </button>
+                );
+              })}
+            </div>
+            <button onClick={fetchListening} disabled={loading} style={btn('primary', 'md')}>
+              {loading ? <Spinner size={14} /> : <Sparkles size={14} />} توليد مقطع
+            </button>
+            {err && <div style={{ color: 'var(--color-text-danger, #B91C1C)', marginTop: '8px', fontSize: '13px' }}>{err}</div>}
+          </>
+        )}
       </div>
 
-      {content && (
+      {submode === 'dictation' && <SmartDictationMode />}
+
+      {submode === 'comprehension' && content && (
         <>
           <div style={T.card}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
