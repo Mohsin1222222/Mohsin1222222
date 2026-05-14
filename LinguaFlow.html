@@ -1,0 +1,2832 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>LinguaFlow — تعلّم الإنجليزية</title>
+
+<style>
+  :root {
+    --color-background-primary: #ffffff;
+    --color-background-secondary: #faf7f2;
+    --color-text-primary: #1a1a1a;
+    --color-text-secondary: #6b6b6b;
+    --color-border-primary: #e5e0d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --color-background-primary: #1a1a1a;
+      --color-background-secondary: #242220;
+      --color-text-primary: #f2f0eb;
+      --color-text-secondary: #9b958a;
+      --color-border-primary: #3a3631;
+    }
+  }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--color-background-primary);
+    color: var(--color-text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif;
+  }
+  #root { min-height: 100vh; }
+  #boot {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; gap: 10px; color: var(--color-text-secondary);
+  }
+  @keyframes lf-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  .lf-boot-spin {
+    width: 18px; height: 18px; border: 2px solid var(--color-border-primary);
+    border-top-color: #BA7517; border-radius: 50%;
+    animation: lf-spin 0.8s linear infinite;
+  }
+  /* In case the user opens the file with no internet — show a hint */
+  .lf-offline-hint { padding: 14px 18px; max-width: 520px; text-align: center; }
+</style>
+
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.3.1",
+    "react-dom": "https://esm.sh/react-dom@18.3.1",
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+    "lucide-react": "https://esm.sh/lucide-react@0.400.0?deps=react@18.3.1"
+  }
+}
+</script>
+
+<!-- Babel for in-browser JSX compilation -->
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js" crossorigin></script>
+</head>
+<body>
+<div id="root">
+  <div id="boot">
+    <div class="lf-boot-spin"></div>
+    <span>جاري التحميل... (أول مرة قد تأخذ بضع ثوانٍ — يحتاج اتصال إنترنت لتحميل المكتبات مرة واحدة)</span>
+  </div>
+</div>
+
+<script type="text/babel" data-type="module" data-presets="react">
+import { createRoot } from 'react-dom/client';
+
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import {
+  Plus, BookOpen, Brain, PenLine, Mic, Headphones,
+  Volume2, Search, Trash2, Check, X, Award, Flame,
+  Sparkles, Download, Upload, Tag as TagIcon, ChevronLeft, ChevronRight,
+  Loader2, RefreshCw, MessageCircle, Lightbulb, Calendar,
+  Star, Target, TrendingUp, Globe, FileText, Send,
+  Play, Pause, RotateCw, Shuffle, BookmarkCheck, Zap,
+  Square, MicOff, Eye, EyeOff, ArrowRight, ArrowLeft,
+  GraduationCap, Briefcase, Scale, Stethoscope, Newspaper,
+  Coins, Shield, Cpu, HeartHandshake, Settings, Key,
+  Languages, ClipboardPaste, History, ChevronDown, ChevronUp
+} from 'lucide-react';
+
+/* ============================================================
+   LinguaFlow — Single-file JSX React app for Arabic speakers
+   learning English at B2+. Focus: writing & speaking.
+   Storage: window.storage (async). API: Anthropic Messages.
+============================================================ */
+
+const STORAGE_KEY  = 'linguaflow_v1';
+const STATS_KEY    = 'linguaflow_stats_v1';
+const SETTINGS_KEY = 'linguaflow_settings_v1';
+const JOURNAL_KEY  = 'linguaflow_journal_v1';
+const API_URL      = 'https://api.anthropic.com/v1/messages';
+const MODEL        = 'claude-sonnet-4-6';
+
+const DOMAINS = [
+  { id: 'daily',      ar: 'يومي',        en: 'daily',      icon: HeartHandshake },
+  { id: 'business',   ar: 'أعمال',       en: 'business',   icon: Briefcase },
+  { id: 'legal',      ar: 'قانوني',      en: 'legal',      icon: Scale },
+  { id: 'medical',    ar: 'طبي',         en: 'medical',    icon: Stethoscope },
+  { id: 'academic',   ar: 'أكاديمي',     en: 'academic',   icon: GraduationCap },
+  { id: 'military',   ar: 'عسكري',       en: 'military',   icon: Shield },
+  { id: 'political',  ar: 'سياسي',       en: 'political',  icon: Globe },
+  { id: 'economic',   ar: 'اقتصادي',     en: 'economic',   icon: Coins },
+  { id: 'news',       ar: 'إخباري',      en: 'news',       icon: Newspaper },
+  { id: 'technology', ar: 'تقني',        en: 'technology', icon: Cpu },
+];
+
+const DOMAIN_MAP = Object.fromEntries(DOMAINS.map(d => [d.id, d]));
+
+/* ---------- Theme helpers ---------- */
+const AMBER = { bg: '#FAEEDA', text: '#633806', border: '#FAC775' };
+
+const T = {
+  card: {
+    background: 'var(--color-background-secondary)',
+    border: '1px solid var(--color-border-primary, #e5e5e5)',
+    borderRadius: '14px',
+    padding: '18px',
+  },
+  cardInner: {
+    background: 'var(--color-background-primary)',
+    border: '1px solid var(--color-border-primary, #e5e5e5)',
+    borderRadius: '10px',
+    padding: '14px',
+  },
+  label: {
+    fontSize: '13px',
+    fontWeight: 600,
+    color: 'var(--color-text-secondary)',
+    marginBottom: '6px',
+    display: 'block',
+  },
+  input: {
+    width: '100%',
+    padding: '10px 12px',
+    borderRadius: '8px',
+    border: '1px solid var(--color-border-primary, #e5e5e5)',
+    background: 'var(--color-background-primary)',
+    color: 'var(--color-text-primary)',
+    fontSize: '14px',
+    fontFamily: 'inherit',
+    boxSizing: 'border-box',
+  },
+  textarea: {
+    width: '100%',
+    padding: '12px',
+    borderRadius: '8px',
+    border: '1px solid var(--color-border-primary, #e5e5e5)',
+    background: 'var(--color-background-primary)',
+    color: 'var(--color-text-primary)',
+    fontSize: '14px',
+    fontFamily: 'inherit',
+    minHeight: '120px',
+    resize: 'vertical',
+    boxSizing: 'border-box',
+  },
+  english: {
+    fontFamily: 'Georgia, serif',
+    color: '#BA7517',
+  },
+  h2: {
+    margin: 0,
+    fontSize: '18px',
+    fontWeight: 700,
+    color: 'var(--color-text-primary)',
+  },
+  muted: {
+    color: 'var(--color-text-secondary)',
+    fontSize: '13px',
+  },
+};
+
+function btn(variant = 'primary', size = 'md') {
+  const sizes = {
+    sm: { padding: '6px 10px', fontSize: '12px' },
+    md: { padding: '9px 14px', fontSize: '14px' },
+    lg: { padding: '12px 20px', fontSize: '15px' },
+  };
+  const variants = {
+    primary: {
+      background: 'var(--color-text-primary)',
+      color: 'var(--color-background-primary)',
+      border: 'none',
+    },
+    secondary: {
+      background: 'var(--color-background-primary)',
+      color: 'var(--color-text-primary)',
+      border: '1px solid var(--color-border-primary, #d4d4d4)',
+    },
+    ghost: {
+      background: 'transparent',
+      color: 'var(--color-text-secondary)',
+      border: 'none',
+    },
+    success: {
+      background: 'var(--color-background-success, #E7F6EA)',
+      color: 'var(--color-text-success, #157A42)',
+      border: '1px solid var(--color-text-success, #157A42)',
+    },
+    danger: {
+      background: 'var(--color-background-danger, #FCE7E7)',
+      color: 'var(--color-text-danger, #B91C1C)',
+      border: '1px solid var(--color-text-danger, #B91C1C)',
+    },
+    info: {
+      background: 'var(--color-background-info, #E0F2FF)',
+      color: 'var(--color-text-info, #0369A1)',
+      border: '1px solid var(--color-text-info, #0369A1)',
+    },
+    amber: {
+      background: AMBER.bg,
+      color: AMBER.text,
+      border: `1px solid ${AMBER.border}`,
+    },
+  };
+  return {
+    ...sizes[size],
+    ...variants[variant],
+    borderRadius: '8px',
+    cursor: 'pointer',
+    fontWeight: 600,
+    fontFamily: 'inherit',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '6px',
+    transition: 'opacity 0.15s, transform 0.05s',
+    whiteSpace: 'nowrap',
+  };
+}
+
+function pill(variant = 'neutral') {
+  const variants = {
+    neutral: { bg: 'var(--color-background-secondary)', color: 'var(--color-text-secondary)' },
+    info:    { bg: 'var(--color-background-info, #E0F2FF)',    color: 'var(--color-text-info, #0369A1)' },
+    success: { bg: 'var(--color-background-success, #E7F6EA)', color: 'var(--color-text-success, #157A42)' },
+    danger:  { bg: 'var(--color-background-danger, #FCE7E7)',  color: 'var(--color-text-danger, #B91C1C)' },
+    amber:   { bg: AMBER.bg, color: AMBER.text },
+  };
+  const v = variants[variant] || variants.neutral;
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    padding: '3px 9px',
+    borderRadius: '999px',
+    fontSize: '12px',
+    fontWeight: 500,
+    background: v.bg,
+    color: v.color,
+    whiteSpace: 'nowrap',
+  };
+}
+
+/* ---------- Storage (localStorage) ---------- */
+async function storageGet(key) {
+  try {
+    const v = localStorage.getItem(key);
+    return v ? JSON.parse(v) : null;
+  } catch (e) { console.error('storage get', e); }
+  return null;
+}
+async function storageSet(key, val) {
+  try {
+    localStorage.setItem(key, JSON.stringify(val));
+  } catch (e) { console.error('storage set', e); }
+}
+
+/* ---------- AI helper ---------- */
+const API_KEY_STORAGE = 'linguaflow_api_key';
+function getApiKey() {
+  try { return localStorage.getItem(API_KEY_STORAGE) || ''; } catch { return ''; }
+}
+async function callAI(userPrompt, systemPrompt, maxTokens = 1000) {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    const err = new Error('NO_API_KEY');
+    err.code = 'NO_API_KEY';
+    throw err;
+  }
+  const body = {
+    model: MODEL,
+    max_tokens: maxTokens,
+    messages: [{ role: 'user', content: userPrompt }],
+  };
+  if (systemPrompt) body.system = systemPrompt;
+  const res = await fetch(API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try { const j = await res.json(); detail = j?.error?.message || ''; } catch {}
+    if (res.status === 401) {
+      const err = new Error('INVALID_KEY');
+      err.code = 'INVALID_KEY';
+      throw err;
+    }
+    const err = new Error('API ' + res.status + (detail ? ' — ' + detail : ''));
+    err.code = 'API_ERROR';
+    throw err;
+  }
+  const data = await res.json();
+  return data?.content?.[0]?.text || '';
+}
+
+function extractJSON(text) {
+  if (!text) return null;
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const candidate = fenced ? fenced[1] : text;
+  try { return JSON.parse(candidate); } catch {}
+  const startO = candidate.indexOf('{');
+  const startA = candidate.indexOf('[');
+  let s = -1, close = '}';
+  if (startO !== -1 && (startA === -1 || startO < startA)) { s = startO; close = '}'; }
+  else if (startA !== -1) { s = startA; close = ']'; }
+  if (s !== -1) {
+    const e = candidate.lastIndexOf(close);
+    if (e > s) { try { return JSON.parse(candidate.slice(s, e + 1)); } catch {} }
+  }
+  return null;
+}
+
+/* ---------- TTS ---------- */
+function speak(text, lang = 'en-US', rate = 0.95) {
+  try {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = lang;
+    u.rate = rate;
+    window.speechSynthesis.speak(u);
+  } catch (e) { console.error(e); }
+}
+function stopSpeaking() {
+  try { window.speechSynthesis && window.speechSynthesis.cancel(); } catch {}
+}
+
+/* ---------- Speech Recognition ---------- */
+function getRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return null;
+  const r = new SR();
+  r.lang = 'en-US';
+  r.continuous = false;
+  r.interimResults = true;
+  r.maxAlternatives = 1;
+  return r;
+}
+
+/* ---------- SRS (SM-2 lite) ---------- */
+function scheduleNext(word, quality) {
+  const ease = word.srsEase || 2.5;
+  const interval = word.srsInterval || 0;
+  let newInt, newEase = ease, newStatus = word.status || 'new';
+  if (quality === 0) { newInt = 1; newEase = Math.max(1.3, ease - 0.2); newStatus = 'review'; }
+  else if (quality === 1) { newInt = Math.max(1, Math.round(Math.max(1, interval) * 1.2)); newEase = Math.max(1.3, ease - 0.15); newStatus = 'review'; }
+  else if (quality === 2) { newInt = interval === 0 ? 2 : Math.round(interval * ease); newStatus = interval >= 14 ? 'known' : 'review'; }
+  else { newInt = interval === 0 ? 4 : Math.round(interval * ease * 1.3); newEase = ease + 0.1; newStatus = 'known'; }
+  return {
+    ...word,
+    srsInterval: newInt,
+    srsEase: newEase,
+    srsDue: Date.now() + newInt * 86400000,
+    lastReviewed: new Date().toISOString(),
+    reviewCount: (word.reviewCount || 0) + 1,
+    status: newStatus,
+  };
+}
+function isDue(w) {
+  if (!w.srsDue) return true;
+  return Date.now() >= w.srsDue;
+}
+
+/* ---------- Misc utils ---------- */
+function todayStr() { return new Date().toISOString().slice(0, 10); }
+function dayDiff(a, b) {
+  const A = new Date(a), B = new Date(b);
+  return Math.round((B - A) / 86400000);
+}
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/* ============================================================
+   Shared components
+============================================================ */
+
+function Spinner({ size = 16 }) {
+  return <Loader2 size={size} style={{ animation: 'lf-spin 1s linear infinite' }} />;
+}
+
+function Header({ stats, wordsCount }) {
+  const [showKeyModal, setShowKeyModal] = useState(false);
+  const [keyInput, setKeyInput] = useState('');
+  const [showKey, setShowKey] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    const cur = getApiKey();
+    setKeyInput(cur);
+    if (!cur) setShowKeyModal(true); // first-run prompt
+  }, []);
+
+  const onSave = () => {
+    const v = keyInput.trim();
+    if (v) localStorage.setItem(API_KEY_STORAGE, v);
+    else localStorage.removeItem(API_KEY_STORAGE);
+    setSaved(true);
+    setTimeout(() => { setSaved(false); setShowKeyModal(false); }, 700);
+  };
+  const onClear = () => {
+    localStorage.removeItem(API_KEY_STORAGE);
+    setKeyInput('');
+  };
+
+  return (
+    <>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: '12px',
+        flexWrap: 'wrap',
+        marginBottom: '14px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{
+            width: '40px', height: '40px', borderRadius: '10px',
+            background: AMBER.bg, color: AMBER.text,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            border: `1px solid ${AMBER.border}`,
+          }}>
+            <Sparkles size={22} />
+          </div>
+          <div>
+            <h1 style={{ margin: 0, fontSize: '20px', fontWeight: 800 }}>
+              LinguaFlow
+            </h1>
+            <div style={T.muted}>تعلّم الإنجليزية بسلاسة — كتابة ومحادثة</div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={pill('amber')} title="سلسلة الأيام">
+            <Flame size={14} /> {stats.streak} يوم
+          </span>
+          <span style={pill('info')} title="عدد الكلمات">
+            <BookOpen size={14} /> {wordsCount} كلمة
+          </span>
+          <span style={pill('success')} title="نسبة المراجعة الناجحة">
+            <Target size={14} /> {stats.sessions > 0 ? Math.round(stats.accuracy) : 0}%
+          </span>
+          <button onClick={() => { setKeyInput(getApiKey()); setShowKeyModal(true); }}
+            style={btn('secondary', 'sm')} title="مفتاح API">
+            <Settings size={14} /> المفتاح
+          </button>
+        </div>
+      </div>
+
+      {showKeyModal && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: '16px', zIndex: 9999,
+        }}
+          onClick={(e) => { if (e.target === e.currentTarget) setShowKeyModal(false); }}
+        >
+          <div style={{
+            ...T.card,
+            maxWidth: '520px', width: '100%',
+            boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+              <Key size={20} color={AMBER.text} />
+              <h2 style={T.h2}>مفتاح Anthropic API</h2>
+            </div>
+            <div style={{ ...T.muted, marginBottom: '14px', lineHeight: 1.7 }}>
+              التطبيق يستخدم Claude للتقييم والمحادثة. الصق مفتاحك من{' '}
+              <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener"
+                style={{ color: AMBER.text, fontWeight: 600 }}>
+                console.anthropic.com
+              </a>
+              . المفتاح يُحفظ في متصفحك فقط ولا يُرسل لأي مكان غير Anthropic.
+            </div>
+            <label style={T.label}>المفتاح (يبدأ بـ sk-ant-)</label>
+            <div style={{ position: 'relative' }}>
+              <input
+                type={showKey ? 'text' : 'password'}
+                value={keyInput}
+                onChange={(e) => setKeyInput(e.target.value)}
+                placeholder="sk-ant-api03-..."
+                style={{ ...T.input, paddingInlineEnd: '44px', fontFamily: 'monospace', direction: 'ltr', textAlign: 'left' }}
+                autoFocus
+                spellCheck={false}
+              />
+              <button onClick={() => setShowKey(s => !s)}
+                style={{
+                  position: 'absolute', insetInlineEnd: '8px', top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'transparent', border: 'none',
+                  cursor: 'pointer', padding: '4px',
+                  color: 'var(--color-text-secondary)',
+                }}
+                title={showKey ? 'إخفاء' : 'إظهار'}
+              >
+                {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '14px', flexWrap: 'wrap' }}>
+              <button onClick={onSave} style={btn('primary', 'md')}>
+                <Check size={14} /> {saved ? 'تم الحفظ' : 'حفظ'}
+              </button>
+              <button onClick={() => setShowKeyModal(false)} style={btn('secondary', 'md')}>
+                إغلاق
+              </button>
+              {keyInput && (
+                <button onClick={onClear} style={btn('danger', 'md')}>
+                  <Trash2 size={14} /> حذف المفتاح
+                </button>
+              )}
+            </div>
+            <div style={{ ...T.muted, marginTop: '12px', fontSize: '12px', lineHeight: 1.6 }}>
+              ⚠️ ملاحظة أمان: ضع مفتاحك فقط على جهازك الشخصي. لا تستخدم هذا الملف على جهاز مشترك أو ترفعه على الإنترنت.
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function TabBar({ tabs, active, onChange }) {
+  return (
+    <div style={{
+      display: 'flex',
+      gap: '6px',
+      overflowX: 'auto',
+      borderBottom: '1px solid var(--color-border-primary, #e5e5e5)',
+      marginBottom: '14px',
+      paddingBottom: '2px',
+    }}>
+      {tabs.map(t => {
+        const Icon = t.icon;
+        const isActive = active === t.id;
+        return (
+          <button
+            key={t.id}
+            onClick={() => onChange(t.id)}
+            style={{
+              ...btn(isActive ? 'amber' : 'ghost', 'md'),
+              borderRadius: '8px 8px 0 0',
+              borderBottom: isActive ? `2px solid ${AMBER.border}` : '2px solid transparent',
+            }}
+          >
+            <Icon size={16} /> {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function WordCard({ word, compact = false }) {
+  if (!word) return null;
+  const domain = DOMAIN_MAP[word.domain] || null;
+  return (
+    <div style={T.cardInner}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div dir="ltr" style={{ ...T.english, fontSize: '22px', fontWeight: 700, marginBottom: '4px' }}>
+            {word.word}
+          </div>
+          {word.pronunciation && (
+            <div dir="ltr" style={{ ...T.muted, fontFamily: 'Georgia, serif' }}>
+              /{word.pronunciation}/
+            </div>
+          )}
+        </div>
+        <button
+          onClick={() => speak(word.word)}
+          style={btn('amber', 'sm')}
+          title="استمع"
+        >
+          <Volume2 size={14} />
+        </button>
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', margin: '8px 0' }}>
+        {word.partOfSpeech && <span style={pill('info')}>{word.partOfSpeech}</span>}
+        {word.register && word.register !== 'neutral' && <span style={pill('neutral')}>{word.register}</span>}
+        {domain && <span style={pill('amber')}>{domain.ar}</span>}
+        {word.status && <span style={pill(word.status === 'known' ? 'success' : word.status === 'review' ? 'danger' : 'neutral')}>
+          {word.status === 'known' ? 'محفوظة' : word.status === 'review' ? 'مراجعة' : 'جديدة'}
+        </span>}
+      </div>
+
+      <div style={{ fontSize: '17px', marginBottom: '8px', fontWeight: 600 }}>
+        {word.translation}
+      </div>
+
+      {word.definition && (
+        <div dir="ltr" style={{ ...T.muted, marginBottom: '10px', fontFamily: 'Georgia, serif', fontStyle: 'italic' }}>
+          {word.definition}
+        </div>
+      )}
+
+      {!compact && word.examples && word.examples.length > 0 && (
+        <div style={{ marginBottom: '10px' }}>
+          <div style={T.label}>أمثلة</div>
+          {word.examples.map((ex, i) => (
+            <div key={i} style={{ marginBottom: '8px', paddingInlineStart: '8px', borderInlineStart: `2px solid ${AMBER.border}` }}>
+              <div dir="ltr" style={{ ...T.english, fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                {ex.en}
+                <button onClick={() => speak(ex.en)} style={{ ...btn('ghost', 'sm'), padding: '2px 4px' }}>
+                  <Volume2 size={12} />
+                </button>
+              </div>
+              <div style={{ ...T.muted, fontSize: '13px' }}>{ex.ar}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!compact && word.collocations && word.collocations.length > 0 && (
+        <div style={{ marginBottom: '10px' }}>
+          <div style={T.label}>تعبيرات شائعة (Collocations)</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            {word.collocations.map((c, i) => (
+              <span key={i} dir="ltr" style={{ ...pill('amber'), ...T.english, fontFamily: 'Georgia, serif' }}>{c}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!compact && word.synonyms && word.synonyms.length > 0 && (
+        <div style={{ marginBottom: '10px' }}>
+          <div style={T.label}>مرادفات</div>
+          <div dir="ltr" style={{ ...T.english, fontSize: '14px' }}>
+            {word.synonyms.join(' · ')}
+          </div>
+        </div>
+      )}
+
+      {!compact && (word.speakingTip || word.writingTip) && (
+        <div style={{ display: 'grid', gap: '8px', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+          {word.speakingTip && (
+            <div style={{ ...T.cardInner, background: AMBER.bg, borderColor: AMBER.border }}>
+              <div style={{ ...T.label, color: AMBER.text }}><Mic size={12} style={{ display: 'inline' }} /> تلميح للمحادثة</div>
+              <div style={{ fontSize: '13px', color: AMBER.text }}>{word.speakingTip}</div>
+            </div>
+          )}
+          {word.writingTip && (
+            <div style={{ ...T.cardInner, background: 'var(--color-background-info, #E0F2FF)', borderColor: 'var(--color-text-info, #0369A1)' }}>
+              <div style={{ ...T.label, color: 'var(--color-text-info, #0369A1)' }}><PenLine size={12} style={{ display: 'inline' }} /> تلميح للكتابة</div>
+              <div style={{ fontSize: '13px', color: 'var(--color-text-info, #0369A1)' }}>{word.writingTip}</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!compact && word.commonMistake && (
+        <div style={{ ...T.cardInner, background: 'var(--color-background-danger, #FCE7E7)', borderColor: 'var(--color-text-danger, #B91C1C)', marginTop: '8px' }}>
+          <div style={{ ...T.label, color: 'var(--color-text-danger, #B91C1C)' }}>⚠️ خطأ شائع</div>
+          <div style={{ fontSize: '13px', color: 'var(--color-text-danger, #B91C1C)' }}>{word.commonMistake}</div>
+        </div>
+      )}
+
+      {word.tags && word.tags.length > 0 && (
+        <div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+          {word.tags.map(t => (
+            <span key={t} style={pill('neutral')}><TagIcon size={11} /> {t}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   Word of the Day banner
+============================================================ */
+function WordOfDay({ words, settings, saveSettings, onSave }) {
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState('');
+
+  const today = todayStr();
+  const wod = settings.wodDate === today ? settings.wod : null;
+
+  const fetchWoD = useCallback(async () => {
+    setLoading(true); setErr('');
+    try {
+      const knownWords = (words || []).slice(-30).map(w => w.word);
+      const domainHint = DOMAINS[new Date().getDate() % DOMAINS.length].en;
+      const prompt =
+`Generate ONE useful English word OR multi-word phrase for an Arabic-speaking B2+ learner.
+Vary the domain — today bias toward: "${domainHint}".
+Avoid these recently-seen items: ${JSON.stringify(knownWords)}.
+Prefer everyday-practical items used in real conversation, news, or work.
+
+Return ONLY a JSON object with this exact schema (no markdown, no commentary):
+{
+  "word": "...",
+  "translation": "ترجمة عربية موجزة",
+  "partOfSpeech": "...",
+  "definition": "simple B2 English definition",
+  "pronunciation": "IPA",
+  "register": "formal|informal|neutral|academic|legal|medical|business",
+  "domain": "daily|business|legal|medical|academic|military|political|economic|news|technology",
+  "examples": [{"en":"...","ar":"..."},{"en":"...","ar":"..."},{"en":"...","ar":"..."}],
+  "collocations": ["...","...","...","..."],
+  "speakingTip": "نصيحة بالعربية لاستخدامه شفهياً",
+  "writingTip": "نصيحة بالعربية للكتابة الرسمية أو غير الرسمية",
+  "synonyms": ["...","..."],
+  "commonMistake": "خطأ شائع يقع فيه المتحدث العربي"
+}`;
+      const text = await callAI(prompt);
+      const obj = extractJSON(text);
+      if (!obj || !obj.word) throw new Error('parse');
+      await saveSettings({ ...settings, wodDate: today, wod: obj });
+    } catch (e) {
+      setErr('تعذّر جلب كلمة اليوم — حاول مجدداً');
+    } finally { setLoading(false); }
+  }, [words, settings, saveSettings, today]);
+
+  useEffect(() => {
+    if (settings.wodDate !== today && !loading) {
+      fetchWoD();
+    }
+  }, [today]); // eslint-disable-line
+
+  if (!wod && !loading && !err) return null;
+
+  return (
+    <div style={{
+      ...T.card,
+      background: `linear-gradient(135deg, ${AMBER.bg} 0%, var(--color-background-secondary) 100%)`,
+      borderColor: AMBER.border,
+      marginBottom: '14px',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Star size={18} style={{ color: AMBER.text }} />
+          <span style={{ fontWeight: 700, color: AMBER.text }}>كلمة اليوم</span>
+          <span style={{ ...T.muted, color: AMBER.text }}>{today}</span>
+        </div>
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <button onClick={fetchWoD} disabled={loading} style={btn('secondary', 'sm')} title="كلمة أخرى">
+            {loading ? <Spinner size={14} /> : <RefreshCw size={14} />}
+          </button>
+          {wod && (
+            <button onClick={() => onSave(wod)} style={btn('amber', 'sm')}>
+              <Plus size={14} /> أضف للمكتبة
+            </button>
+          )}
+        </div>
+      </div>
+      {err && <div style={{ color: 'var(--color-text-danger, #B91C1C)', fontSize: '13px' }}>{err}</div>}
+      {wod && <WordCard word={wod} />}
+      {loading && !wod && <div style={T.muted}>جاري التحضير...</div>}
+    </div>
+  );
+}
+
+/* ============================================================
+   Add Tab
+============================================================ */
+function AddTab({ words, saveWords }) {
+  const [input, setInput] = useState('');
+  const [domainHint, setDomainHint] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [err, setErr] = useState('');
+  const [saved, setSaved] = useState(false);
+  const [tagsInput, setTagsInput] = useState('');
+
+  const onAnalyze = async () => {
+    if (!input.trim()) return;
+    setLoading(true); setErr(''); setResult(null); setSaved(false);
+    try {
+      const prompt =
+`You are an English tutor for an Arabic-speaking learner at B2+ (intermediate-upper).
+Focus on practical use in speaking and writing across multiple domains
+(daily, business, legal, medical, academic, military, political, economic, news, technology).
+
+Input: "${input.trim()}"
+${domainHint ? `User-hinted domain: ${domainHint}` : ''}
+
+Return ONLY a JSON object (no markdown, no commentary) with this schema:
+{
+  "word": "the canonical English word/phrase",
+  "translation": "ترجمة عربية موجزة",
+  "partOfSpeech": "noun|verb|adjective|phrase|idiom|...",
+  "definition": "simple B2 English definition",
+  "pronunciation": "IPA",
+  "register": "formal|informal|neutral|academic|legal|medical|business",
+  "domain": "daily|business|legal|medical|academic|military|political|economic|news|technology",
+  "examples": [
+    {"en":"natural example sentence","ar":"الترجمة"},
+    {"en":"...","ar":"..."},
+    {"en":"...","ar":"..."}
+  ],
+  "collocations": ["phrase 1","phrase 2","phrase 3","phrase 4"],
+  "speakingTip": "نصيحة عربية: متى وكيف تستخدمها في الكلام",
+  "writingTip": "نصيحة عربية: مستوى الرسمية، الاستخدام في الكتابة",
+  "synonyms": ["b2-level alt 1","b2-level alt 2"],
+  "commonMistake": "خطأ شائع يقع فيه المتحدث العربي عند استخدامها"
+}`;
+      const text = await callAI(prompt);
+      const obj = extractJSON(text);
+      if (!obj || !obj.word) throw new Error('parse');
+      setResult(obj);
+    } catch (e) {
+      setErr('تعذّر تحليل الكلمة — تأكد من الاتصال وحاول مجدداً');
+    } finally { setLoading(false); }
+  };
+
+  const onSave = async () => {
+    if (!result) return;
+    const tags = tagsInput.split(',').map(s => s.trim()).filter(Boolean);
+    const newWord = {
+      id: Date.now(),
+      ...result,
+      tags,
+      status: 'new',
+      addedAt: new Date().toISOString(),
+      lastReviewed: '',
+      reviewCount: 0,
+      srsInterval: 0,
+      srsEase: 2.5,
+      srsDue: Date.now(),
+    };
+    await saveWords([newWord, ...words]);
+    setSaved(true);
+    setInput(''); setResult(null); setTagsInput('');
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <div style={T.card}>
+        <h2 style={T.h2}>إضافة كلمة أو عبارة جديدة</h2>
+        <div style={{ ...T.muted, marginTop: '4px', marginBottom: '12px' }}>
+          اكتب أي شيء بالإنجليزية — كلمة، عبارة اصطلاحية، أو مصطلح تخصصي.
+        </div>
+        <label style={T.label}>الكلمة / العبارة</label>
+        <input
+          dir="ltr"
+          style={{ ...T.input, ...T.english }}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          placeholder="e.g., due diligence, on the fence, malpractice"
+          onKeyDown={e => { if (e.key === 'Enter') onAnalyze(); }}
+        />
+        <div style={{ marginTop: '12px' }}>
+          <div style={T.label}>المجال (اختياري — يساعد الذكاء على الاختيار)</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            <button
+              onClick={() => setDomainHint('')}
+              style={{ ...btn(domainHint === '' ? 'amber' : 'secondary', 'sm') }}
+            >تلقائي</button>
+            {DOMAINS.map(d => {
+              const I = d.icon;
+              return (
+                <button
+                  key={d.id}
+                  onClick={() => setDomainHint(d.id)}
+                  style={btn(domainHint === d.id ? 'amber' : 'secondary', 'sm')}
+                >
+                  <I size={12} /> {d.ar}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div style={{ marginTop: '12px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button onClick={onAnalyze} disabled={loading || !input.trim()} style={btn('primary', 'md')}>
+            {loading ? <Spinner size={14} /> : <Sparkles size={14} />}
+            تحليل بالذكاء الاصطناعي
+          </button>
+          {saved && <span style={pill('success')}><Check size={12} /> تم الحفظ في المكتبة</span>}
+        </div>
+        {err && <div style={{ color: 'var(--color-text-danger, #B91C1C)', marginTop: '10px', fontSize: '13px' }}>{err}</div>}
+      </div>
+
+      {result && (
+        <div style={T.card}>
+          <h2 style={{ ...T.h2, marginBottom: '10px' }}>النتيجة</h2>
+          <WordCard word={result} />
+          <div style={{ marginTop: '12px' }}>
+            <label style={T.label}>وسوم (افصل بفواصل، مثل: عمل، مقابلات)</label>
+            <input
+              style={T.input}
+              value={tagsInput}
+              onChange={e => setTagsInput(e.target.value)}
+              placeholder="اختياري"
+            />
+          </div>
+          <div style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
+            <button onClick={onSave} style={btn('success', 'md')}>
+              <BookmarkCheck size={14} /> حفظ في المكتبة
+            </button>
+            <button onClick={() => setResult(null)} style={btn('secondary', 'md')}>
+              <X size={14} /> إلغاء
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   Library Tab
+============================================================ */
+function LibraryTab({ words, saveWords }) {
+  const [q, setQ] = useState('');
+  const [filter, setFilter] = useState('all');
+  const [domainFilter, setDomainFilter] = useState('');
+  const [tagFilter, setTagFilter] = useState('');
+  const [selected, setSelected] = useState(null);
+  const fileRef = useRef(null);
+
+  const allTags = useMemo(() => {
+    const s = new Set();
+    words.forEach(w => (w.tags || []).forEach(t => s.add(t)));
+    return Array.from(s);
+  }, [words]);
+
+  const filtered = useMemo(() => {
+    return words.filter(w => {
+      if (filter !== 'all' && w.status !== filter) return false;
+      if (domainFilter && w.domain !== domainFilter) return false;
+      if (tagFilter && !(w.tags || []).includes(tagFilter)) return false;
+      if (q) {
+        const t = q.toLowerCase();
+        if (!w.word?.toLowerCase().includes(t) && !w.translation?.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [words, q, filter, domainFilter, tagFilter]);
+
+  const updateWord = async (id, patch) => {
+    const next = words.map(w => w.id === id ? { ...w, ...patch } : w);
+    await saveWords(next);
+    if (selected && selected.id === id) setSelected({ ...selected, ...patch });
+  };
+  const deleteWord = async (id) => {
+    await saveWords(words.filter(w => w.id !== id));
+    if (selected && selected.id === id) setSelected(null);
+  };
+
+  const exportJSON = () => {
+    const blob = new Blob([JSON.stringify(words, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `linguaflow-${todayStr()}.json`; a.click();
+    URL.revokeObjectURL(url);
+  };
+  const exportCSV = () => {
+    const head = 'word,translation,partOfSpeech,domain,status,pronunciation,addedAt';
+    const rows = words.map(w =>
+      [w.word, w.translation, w.partOfSpeech, w.domain, w.status, w.pronunciation, w.addedAt]
+        .map(v => `"${(v || '').toString().replace(/"/g, '""')}"`).join(',')
+    );
+    const blob = new Blob([head + '\n' + rows.join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `linguaflow-${todayStr()}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
+  const importFile = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const text = await f.text();
+    try {
+      let incoming = [];
+      if (f.name.endsWith('.json')) {
+        const arr = JSON.parse(text);
+        if (Array.isArray(arr)) incoming = arr;
+      } else {
+        const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+        incoming = lines.map((line, i) => ({
+          id: Date.now() + i,
+          word: line,
+          translation: '',
+          status: 'new',
+          addedAt: new Date().toISOString(),
+          reviewCount: 0,
+          examples: [],
+        }));
+      }
+      const existingWords = new Set(words.map(w => w.word?.toLowerCase()));
+      const fresh = incoming.filter(w => w.word && !existingWords.has(w.word.toLowerCase()));
+      await saveWords([...fresh, ...words]);
+      e.target.value = '';
+      alert(`تم استيراد ${fresh.length} كلمة`);
+    } catch {
+      alert('ملف غير صالح');
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <div style={T.card}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+          <h2 style={T.h2}>مكتبتي ({words.length})</h2>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            <button onClick={() => fileRef.current?.click()} style={btn('secondary', 'sm')}>
+              <Upload size={14} /> استيراد
+            </button>
+            <input ref={fileRef} type="file" accept=".json,.txt,.csv" style={{ display: 'none' }} onChange={importFile} />
+            <button onClick={exportJSON} style={btn('secondary', 'sm')}>
+              <Download size={14} /> JSON
+            </button>
+            <button onClick={exportCSV} style={btn('secondary', 'sm')}>
+              <Download size={14} /> CSV
+            </button>
+          </div>
+        </div>
+
+        <div style={{ marginTop: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <Search size={16} style={{ color: 'var(--color-text-secondary)' }} />
+          <input
+            style={T.input}
+            value={q}
+            onChange={e => setQ(e.target.value)}
+            placeholder="ابحث عن كلمة..."
+          />
+        </div>
+
+        <div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+          {[
+            ['all', 'الكل'],
+            ['new', 'جديدة'],
+            ['review', 'مراجعة'],
+            ['known', 'محفوظة'],
+          ].map(([id, label]) => (
+            <button key={id}
+              onClick={() => setFilter(id)}
+              style={btn(filter === id ? 'amber' : 'secondary', 'sm')}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+          <button onClick={() => setDomainFilter('')} style={btn(!domainFilter ? 'amber' : 'ghost', 'sm')}>
+            كل المجالات
+          </button>
+          {DOMAINS.map(d => {
+            const I = d.icon;
+            return (
+              <button key={d.id} onClick={() => setDomainFilter(d.id === domainFilter ? '' : d.id)}
+                style={btn(domainFilter === d.id ? 'amber' : 'ghost', 'sm')}>
+                <I size={12} /> {d.ar}
+              </button>
+            );
+          })}
+        </div>
+
+        {allTags.length > 0 && (
+          <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            <span style={T.muted}>وسوم:</span>
+            {allTags.map(t => (
+              <button key={t}
+                onClick={() => setTagFilter(t === tagFilter ? '' : t)}
+                style={btn(tagFilter === t ? 'amber' : 'ghost', 'sm')}>
+                <TagIcon size={12} /> {t}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {filtered.length === 0 ? (
+        <div style={{ ...T.card, textAlign: 'center', color: 'var(--color-text-secondary)' }}>
+          لا توجد نتائج. ابدأ بإضافة كلمات من تبويب الإضافة.
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: '10px', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}>
+          {filtered.map(w => (
+            <button key={w.id} onClick={() => setSelected(w)} style={{
+              ...T.cardInner,
+              textAlign: 'right',
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              transition: 'transform 0.1s',
+            }}>
+              <div dir="ltr" style={{ ...T.english, fontSize: '17px', fontWeight: 700, marginBottom: '2px' }}>
+                {w.word}
+              </div>
+              <div style={{ fontSize: '14px', marginBottom: '6px' }}>{w.translation}</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                <span style={pill(w.status === 'known' ? 'success' : w.status === 'review' ? 'danger' : 'neutral')}>
+                  {w.status === 'known' ? 'محفوظة' : w.status === 'review' ? 'مراجعة' : 'جديدة'}
+                </span>
+                {w.domain && DOMAIN_MAP[w.domain] && <span style={pill('amber')}>{DOMAIN_MAP[w.domain].ar}</span>}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {selected && (
+        <div style={T.card}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+            <h2 style={T.h2}>تفاصيل الكلمة</h2>
+            <button onClick={() => setSelected(null)} style={btn('ghost', 'sm')}>
+              <X size={14} />
+            </button>
+          </div>
+          <WordCard word={selected} />
+          <div style={{ marginTop: '12px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            <button onClick={() => updateWord(selected.id, { status: 'review' })} style={btn('danger', 'sm')}>
+              تحتاج مراجعة
+            </button>
+            <button onClick={() => updateWord(selected.id, { status: 'known' })} style={btn('success', 'sm')}>
+              <Check size={14} /> حفظتها تماماً
+            </button>
+            <button onClick={() => deleteWord(selected.id)} style={btn('ghost', 'sm')}>
+              <Trash2 size={14} /> حذف
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   Review Tab (SRS flashcards)
+============================================================ */
+function ReviewTab({ words, saveWords, stats, saveStats }) {
+  const [deck, setDeck] = useState([]);
+  const [idx, setIdx] = useState(0);
+  const [flipped, setFlipped] = useState(false);
+  const [done, setDone] = useState(false);
+  const [results, setResults] = useState({ correct: 0, total: 0 });
+  const [mode, setMode] = useState('srs');
+
+  const startSession = useCallback(() => {
+    if (words.length === 0) return;
+    let pool;
+    if (mode === 'srs') {
+      pool = words.filter(isDue);
+      if (pool.length === 0) pool = shuffle(words).slice(0, 10);
+    } else {
+      pool = shuffle(words);
+    }
+    setDeck(pool.slice(0, 10));
+    setIdx(0); setFlipped(false); setDone(false);
+    setResults({ correct: 0, total: 0 });
+  }, [words, mode]);
+
+  useEffect(() => { startSession(); }, [mode]); // eslint-disable-line
+
+  const rate = async (quality) => {
+    const cur = deck[idx];
+    if (!cur) return;
+    const updated = scheduleNext(cur, quality);
+    const nextWords = words.map(w => w.id === cur.id ? updated : w);
+    await saveWords(nextWords);
+    const newResults = {
+      correct: results.correct + (quality >= 2 ? 1 : 0),
+      total: results.total + 1,
+    };
+    setResults(newResults);
+    if (idx + 1 >= deck.length) {
+      setDone(true);
+      const acc = newResults.total > 0 ? (newResults.correct / newResults.total) * 100 : 0;
+      const nSessions = stats.sessions + 1;
+      const newAcc = (stats.accuracy * stats.sessions + acc) / nSessions;
+      await saveStats({
+        ...stats,
+        sessions: nSessions,
+        accuracy: newAcc,
+        totalLearned: nextWords.filter(w => w.status === 'known').length,
+      });
+    } else {
+      setIdx(idx + 1);
+      setFlipped(false);
+    }
+  };
+
+  if (words.length === 0) {
+    return (
+      <div style={{ ...T.card, textAlign: 'center', color: 'var(--color-text-secondary)' }}>
+        أضف كلمات أولاً لتبدأ المراجعة.
+      </div>
+    );
+  }
+
+  if (done) {
+    const acc = results.total > 0 ? Math.round((results.correct / results.total) * 100) : 0;
+    return (
+      <div style={{ ...T.card, textAlign: 'center' }}>
+        <Award size={48} style={{ color: AMBER.text, margin: '0 auto 10px', display: 'block' }} />
+        <h2 style={T.h2}>أنهيت الجلسة!</h2>
+        <div style={{ fontSize: '36px', fontWeight: 800, margin: '12px 0', color: AMBER.text }}>
+          {acc}%
+        </div>
+        <div style={T.muted}>{results.correct} / {results.total} كلمة بإجابات جيدة</div>
+        <div style={{ marginTop: '14px', display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
+          <button onClick={startSession} style={btn('primary', 'md')}>
+            <RefreshCw size={14} /> جلسة جديدة
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const cur = deck[idx];
+  if (!cur) return null;
+  const progress = ((idx + (flipped ? 0.5 : 0)) / deck.length) * 100;
+  const dueCount = words.filter(isDue).length;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <div style={T.card}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+          <h2 style={T.h2}>المراجعة</h2>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            <button onClick={() => setMode('srs')} style={btn(mode === 'srs' ? 'amber' : 'secondary', 'sm')}>
+              <Brain size={14} /> تكرار متباعد ({dueCount} مستحقة)
+            </button>
+            <button onClick={() => setMode('shuffle')} style={btn(mode === 'shuffle' ? 'amber' : 'secondary', 'sm')}>
+              <Shuffle size={14} /> عشوائي
+            </button>
+          </div>
+        </div>
+        <div style={{ marginTop: '12px', background: 'var(--color-background-primary)', height: '8px', borderRadius: '4px', overflow: 'hidden', border: '1px solid var(--color-border-primary, #e5e5e5)' }}>
+          <div style={{ width: `${progress}%`, height: '100%', background: AMBER.border, transition: 'width 0.3s' }} />
+        </div>
+        <div style={{ ...T.muted, marginTop: '6px', textAlign: 'center' }}>
+          {idx + 1} / {deck.length}
+        </div>
+      </div>
+
+      <div style={{ ...T.card, minHeight: '280px' }}>
+        {!flipped ? (
+          <div style={{ textAlign: 'center', padding: '20px 0' }}>
+            <div dir="ltr" style={{ ...T.english, fontSize: '36px', fontWeight: 700, marginBottom: '10px' }}>
+              {cur.word}
+            </div>
+            {cur.pronunciation && (
+              <div dir="ltr" style={{ ...T.muted, fontFamily: 'Georgia, serif', fontSize: '16px' }}>
+                /{cur.pronunciation}/
+              </div>
+            )}
+            <button onClick={() => speak(cur.word)} style={{ ...btn('amber', 'md'), marginTop: '12px' }}>
+              <Volume2 size={16} /> استمع
+            </button>
+            <div style={{ marginTop: '20px' }}>
+              <button onClick={() => setFlipped(true)} style={btn('primary', 'lg')}>
+                <Eye size={16} /> أظهر المعنى
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <div style={{ textAlign: 'center', marginBottom: '12px' }}>
+              <div dir="ltr" style={{ ...T.english, fontSize: '22px', fontWeight: 700 }}>{cur.word}</div>
+              <div style={{ fontSize: '20px', fontWeight: 600, marginTop: '6px' }}>{cur.translation}</div>
+            </div>
+            {cur.definition && (
+              <div dir="ltr" style={{ ...T.muted, fontStyle: 'italic', fontFamily: 'Georgia, serif', textAlign: 'center', marginBottom: '10px' }}>
+                {cur.definition}
+              </div>
+            )}
+            {cur.examples && cur.examples[0] && (
+              <div style={{ ...T.cardInner, background: AMBER.bg, borderColor: AMBER.border, marginBottom: '14px' }}>
+                <div dir="ltr" style={{ ...T.english, marginBottom: '4px' }}>{cur.examples[0].en}</div>
+                <div style={{ ...T.muted, color: AMBER.text }}>{cur.examples[0].ar}</div>
+              </div>
+            )}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '8px' }}>
+              <button onClick={() => rate(0)} style={btn('danger', 'md')}>لم أعرفها</button>
+              <button onClick={() => rate(1)} style={btn('secondary', 'md')}>صعبة</button>
+              <button onClick={() => rate(2)} style={btn('info', 'md')}>جيد</button>
+              <button onClick={() => rate(3)} style={btn('success', 'md')}>ممتاز</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   Writing Tab — essay / sentence-builder / paraphrase
+============================================================ */
+function WritingTab({ words }) {
+  const [mode, setMode] = useState('essay');
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <div style={T.card}>
+        <h2 style={T.h2}>تدريبات الكتابة</h2>
+        <div style={{ ...T.muted, marginTop: '4px', marginBottom: '12px' }}>
+          مهارة الكتابة تتطور بالكمية + التغذية الراجعة. ثلاثة أساليب مكمّلة:
+        </div>
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+          <button onClick={() => setMode('essay')} style={btn(mode === 'essay' ? 'amber' : 'secondary', 'sm')}>
+            <FileText size={14} /> فقرة موجّهة
+          </button>
+          <button onClick={() => setMode('builder')} style={btn(mode === 'builder' ? 'amber' : 'secondary', 'sm')}>
+            <Zap size={14} /> بناء جملة/قصة
+          </button>
+          <button onClick={() => setMode('paraphrase')} style={btn(mode === 'paraphrase' ? 'amber' : 'secondary', 'sm')}>
+            <RefreshCw size={14} /> إعادة صياغة
+          </button>
+        </div>
+      </div>
+      {mode === 'essay' && <EssayMode words={words} />}
+      {mode === 'builder' && <BuilderMode words={words} />}
+      {mode === 'paraphrase' && <ParaphraseMode />}
+    </div>
+  );
+}
+
+function EssayMode({ words }) {
+  const [topic, setTopic] = useState(null);
+  const [loadingTopic, setLoadingTopic] = useState(false);
+  const [text, setText] = useState('');
+  const [loadingEval, setLoadingEval] = useState(false);
+  const [evaluation, setEvaluation] = useState(null);
+  const [err, setErr] = useState('');
+
+  const newTopic = async () => {
+    setLoadingTopic(true); setErr(''); setEvaluation(null); setText('');
+    try {
+      const sample = shuffle(words).slice(0, 8).map(w => w.word);
+      const prompt =
+`Generate ONE writing prompt for an Arabic-speaking B2+ English learner.
+Make the topic everyday-practical (work, news, life, travel, opinion).
+${sample.length ? `If natural, suggest words from this list to use: ${JSON.stringify(sample)}.` : ''}
+Return ONLY JSON:
+{
+  "topic": "the topic question in English",
+  "topicAr": "نفس الموضوع بالعربية",
+  "guidanceAr": "إرشادات قصيرة بالعربية عن النقاط التي يمكن تغطيتها",
+  "suggestedWords": ["...","...","..."]
+}`;
+      const t = await callAI(prompt);
+      const obj = extractJSON(t);
+      if (!obj || !obj.topic) throw new Error();
+      setTopic(obj);
+    } catch { setErr('تعذّر توليد موضوع'); }
+    finally { setLoadingTopic(false); }
+  };
+
+  const evaluate = async () => {
+    if (!text.trim() || !topic) return;
+    setLoadingEval(true); setErr(''); setEvaluation(null);
+    try {
+      const prompt =
+`You are an English teacher giving feedback to an Arabic-speaking B2+ learner.
+Topic: "${topic.topic}"
+Student wrote:
+"""
+${text.trim()}
+"""
+
+Return ONLY JSON:
+{
+  "score": 0-100,
+  "overall": "تقييم شامل بالعربية، يشرح نقاط القوة والضعف",
+  "corrections": [
+    {"original":"the exact original phrase","corrected":"the fixed English","noteAr":"شرح بالعربية"}
+  ],
+  "improved": "an improved English version of the whole text at B2+ level",
+  "encouragement": "رسالة تشجيعية قصيرة بالعربية"
+}`;
+      const t = await callAI(prompt);
+      const obj = extractJSON(t);
+      if (!obj) throw new Error();
+      setEvaluation(obj);
+    } catch { setErr('تعذّر التقييم'); }
+    finally { setLoadingEval(false); }
+  };
+
+  return (
+    <div style={T.card}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+        <h2 style={T.h2}>كتابة فقرة موجّهة</h2>
+        <button onClick={newTopic} disabled={loadingTopic} style={btn('amber', 'sm')}>
+          {loadingTopic ? <Spinner size={14} /> : <Sparkles size={14} />} موضوع جديد
+        </button>
+      </div>
+
+      {topic && (
+        <div style={{ ...T.cardInner, marginTop: '12px', background: AMBER.bg, borderColor: AMBER.border }}>
+          <div dir="ltr" style={{ ...T.english, fontSize: '16px', fontWeight: 700, marginBottom: '4px' }}>
+            {topic.topic}
+          </div>
+          <div style={{ color: AMBER.text, fontSize: '14px', marginBottom: '6px' }}>{topic.topicAr}</div>
+          <div style={{ ...T.muted, color: AMBER.text }}>{topic.guidanceAr}</div>
+          {topic.suggestedWords && topic.suggestedWords.length > 0 && (
+            <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+              {topic.suggestedWords.map((w, i) => (
+                <span key={i} dir="ltr" style={{ ...pill('amber'), ...T.english }}>{w}</span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={{ marginTop: '12px' }}>
+        <label style={T.label}>اكتب 3-5 جمل بالإنجليزية</label>
+        <textarea
+          dir="ltr"
+          style={{ ...T.textarea, ...T.english }}
+          value={text}
+          onChange={e => setText(e.target.value)}
+          placeholder="Write your response here..."
+        />
+      </div>
+      <div style={{ marginTop: '10px', display: 'flex', gap: '8px' }}>
+        <button onClick={evaluate} disabled={loadingEval || !text.trim() || !topic} style={btn('primary', 'md')}>
+          {loadingEval ? <Spinner size={14} /> : <Send size={14} />} تقييم
+        </button>
+      </div>
+      {err && <div style={{ color: 'var(--color-text-danger, #B91C1C)', marginTop: '10px', fontSize: '13px' }}>{err}</div>}
+
+      {evaluation && (
+        <div style={{ marginTop: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div style={{ ...T.cardInner, textAlign: 'center', background: AMBER.bg, borderColor: AMBER.border }}>
+            <div style={{ fontSize: '34px', fontWeight: 800, color: AMBER.text }}>{evaluation.score}/100</div>
+            <div style={{ color: AMBER.text }}>{evaluation.overall}</div>
+          </div>
+          {evaluation.corrections && evaluation.corrections.length > 0 && (
+            <div style={T.cardInner}>
+              <div style={T.label}>تصحيحات</div>
+              {evaluation.corrections.map((c, i) => (
+                <div key={i} style={{ marginBottom: '10px', paddingBottom: '10px', borderBottom: '1px dashed var(--color-border-primary, #e5e5e5)' }}>
+                  <div dir="ltr" style={{ color: 'var(--color-text-danger, #B91C1C)', textDecoration: 'line-through', fontFamily: 'Georgia, serif' }}>{c.original}</div>
+                  <div dir="ltr" style={{ color: 'var(--color-text-success, #157A42)', fontFamily: 'Georgia, serif' }}>{c.corrected}</div>
+                  <div style={{ ...T.muted, marginTop: '4px' }}>{c.noteAr}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {evaluation.improved && (
+            <div style={T.cardInner}>
+              <div style={T.label}>نسخة محسّنة</div>
+              <div dir="ltr" style={{ ...T.english, fontStyle: 'italic' }}>{evaluation.improved}</div>
+              <button onClick={() => speak(evaluation.improved)} style={{ ...btn('amber', 'sm'), marginTop: '6px' }}>
+                <Volume2 size={12} /> استمع
+              </button>
+            </div>
+          )}
+          {evaluation.encouragement && (
+            <div style={{ ...T.cardInner, background: 'var(--color-background-success, #E7F6EA)', borderColor: 'var(--color-text-success, #157A42)' }}>
+              <div style={{ color: 'var(--color-text-success, #157A42)' }}>{evaluation.encouragement}</div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BuilderMode({ words }) {
+  const [picked, setPicked] = useState([]);
+  const [story, setStory] = useState(null);
+  const [userText, setUserText] = useState('');
+  const [feedback, setFeedback] = useState(null);
+  const [loading1, setLoading1] = useState(false);
+  const [loading2, setLoading2] = useState(false);
+  const [err, setErr] = useState('');
+
+  const togglePick = (w) => {
+    if (picked.find(p => p.id === w.id)) setPicked(picked.filter(p => p.id !== w.id));
+    else if (picked.length < 3) setPicked([...picked, w]);
+  };
+
+  const buildStory = async () => {
+    if (picked.length < 2) return;
+    setLoading1(true); setErr(''); setStory(null); setFeedback(null);
+    try {
+      const list = picked.map(w => w.word);
+      const prompt =
+`Write a short cohesive English mini-story (4-6 sentences) at B2 level
+that naturally uses ALL of these words/phrases: ${JSON.stringify(list)}.
+Then provide its Arabic translation.
+
+Return ONLY JSON:
+{
+  "story": "the English story",
+  "ar": "ترجمة عربية"
+}`;
+      const t = await callAI(prompt);
+      const obj = extractJSON(t);
+      if (!obj || !obj.story) throw new Error();
+      setStory(obj);
+    } catch { setErr('تعذّر التوليد'); }
+    finally { setLoading1(false); }
+  };
+
+  const evaluateMine = async () => {
+    if (!userText.trim() || picked.length === 0) return;
+    setLoading2(true); setErr(''); setFeedback(null);
+    try {
+      const list = picked.map(w => w.word);
+      const prompt =
+`The learner had to write an English mini-story using these words: ${JSON.stringify(list)}.
+Their writing:
+"""
+${userText.trim()}
+"""
+Evaluate it. Return ONLY JSON:
+{
+  "usedAll": true|false,
+  "missing": ["word that was not used or was misused"],
+  "score": 0-100,
+  "feedbackAr": "تغذية راجعة عربية",
+  "improved": "improved English version"
+}`;
+      const t = await callAI(prompt);
+      const obj = extractJSON(t);
+      if (!obj) throw new Error();
+      setFeedback(obj);
+    } catch { setErr('تعذّر التقييم'); }
+    finally { setLoading2(false); }
+  };
+
+  if (words.length === 0) {
+    return <div style={{ ...T.card, color: 'var(--color-text-secondary)' }}>أضف كلمات أولاً لبناء قصة.</div>;
+  }
+
+  return (
+    <div style={T.card}>
+      <h2 style={T.h2}>بناء جملة / قصة</h2>
+      <div style={{ ...T.muted, marginTop: '4px', marginBottom: '12px' }}>
+        اختر 2-3 كلمات من مكتبتك، شاهد كيف تستخدمها في سياق، ثم اكتب نسختك.
+      </div>
+
+      <div style={T.label}>اختر كلمات ({picked.length}/3)</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px', maxHeight: '180px', overflow: 'auto', padding: '4px' }}>
+        {words.map(w => {
+          const isP = picked.find(p => p.id === w.id);
+          return (
+            <button key={w.id} onClick={() => togglePick(w)}
+              style={btn(isP ? 'amber' : 'secondary', 'sm')}>
+              <span dir="ltr" style={T.english}>{w.word}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <button onClick={buildStory} disabled={picked.length < 2 || loading1} style={btn('primary', 'md')}>
+        {loading1 ? <Spinner size={14} /> : <Sparkles size={14} />} أنشئ قصة نموذج
+      </button>
+
+      {story && (
+        <div style={{ ...T.cardInner, marginTop: '12px', background: AMBER.bg, borderColor: AMBER.border }}>
+          <div dir="ltr" style={{ ...T.english, marginBottom: '6px' }}>{story.story}</div>
+          <div style={{ color: AMBER.text, fontSize: '13px' }}>{story.ar}</div>
+          <button onClick={() => speak(story.story)} style={{ ...btn('secondary', 'sm'), marginTop: '6px' }}>
+            <Volume2 size={12} /> استمع
+          </button>
+        </div>
+      )}
+
+      <div style={{ marginTop: '14px' }}>
+        <label style={T.label}>الآن اكتب نسختك الخاصة</label>
+        <textarea dir="ltr" style={{ ...T.textarea, ...T.english }} value={userText}
+          onChange={e => setUserText(e.target.value)} placeholder="Your own version using the chosen words..." />
+      </div>
+      <button onClick={evaluateMine} disabled={!userText.trim() || loading2} style={{ ...btn('primary', 'md'), marginTop: '8px' }}>
+        {loading2 ? <Spinner size={14} /> : <Send size={14} />} قيّم نسختي
+      </button>
+
+      {err && <div style={{ color: 'var(--color-text-danger, #B91C1C)', marginTop: '8px', fontSize: '13px' }}>{err}</div>}
+
+      {feedback && (
+        <div style={{ ...T.cardInner, marginTop: '12px' }}>
+          <div style={{ fontSize: '28px', fontWeight: 800, textAlign: 'center', color: AMBER.text }}>{feedback.score}/100</div>
+          <div style={{ marginBottom: '10px' }}>{feedback.feedbackAr}</div>
+          {feedback.missing && feedback.missing.length > 0 && (
+            <div style={pill('danger')}>لم تُستخدم: {feedback.missing.join(', ')}</div>
+          )}
+          {feedback.improved && (
+            <div style={{ marginTop: '10px' }}>
+              <div style={T.label}>نسخة محسّنة</div>
+              <div dir="ltr" style={{ ...T.english, fontStyle: 'italic' }}>{feedback.improved}</div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ParaphraseMode() {
+  const [original, setOriginal] = useState(null);
+  const [userText, setUserText] = useState('');
+  const [evalRes, setEvalRes] = useState(null);
+  const [loading1, setLoading1] = useState(false);
+  const [loading2, setLoading2] = useState(false);
+
+  const newSentence = async () => {
+    setLoading1(true); setEvalRes(null); setUserText('');
+    try {
+      const prompt =
+`Give ONE English sentence at B2 level (15-25 words) for paraphrasing practice.
+Topic can be from: news, business, law, medicine, daily life, opinion.
+Return ONLY JSON:
+{ "sentence": "...", "ar": "ترجمة عربية", "hintAr": "تلميح للصياغة بطريقة مختلفة" }`;
+      const t = await callAI(prompt);
+      const obj = extractJSON(t);
+      if (obj && obj.sentence) setOriginal(obj);
+    } finally { setLoading1(false); }
+  };
+
+  const evaluate = async () => {
+    if (!userText.trim() || !original) return;
+    setLoading2(true);
+    try {
+      const prompt =
+`Original: "${original.sentence}"
+Learner's paraphrase: "${userText.trim()}"
+
+Evaluate: did the meaning survive? is the grammar correct? is wording sufficiently different?
+
+Return ONLY JSON:
+{
+  "score": 0-100,
+  "preservedMeaning": true|false,
+  "differentEnough": true|false,
+  "feedbackAr": "تغذية راجعة عربية",
+  "modelParaphrase": "a clean B2 paraphrase model"
+}`;
+      const t = await callAI(prompt);
+      const obj = extractJSON(t);
+      if (obj) setEvalRes(obj);
+    } finally { setLoading2(false); }
+  };
+
+  return (
+    <div style={T.card}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
+        <h2 style={T.h2}>إعادة صياغة</h2>
+        <button onClick={newSentence} disabled={loading1} style={btn('amber', 'sm')}>
+          {loading1 ? <Spinner size={14} /> : <Sparkles size={14} />} جملة جديدة
+        </button>
+      </div>
+      <div style={{ ...T.muted, marginTop: '4px', marginBottom: '10px' }}>
+        أعد كتابة الجملة بكلماتك دون فقدان المعنى — تمرين قوي للمرونة في الكتابة.
+      </div>
+
+      {original && (
+        <div style={{ ...T.cardInner, background: AMBER.bg, borderColor: AMBER.border, marginBottom: '12px' }}>
+          <div dir="ltr" style={{ ...T.english, fontSize: '16px' }}>{original.sentence}</div>
+          <div style={{ color: AMBER.text, fontSize: '13px', marginTop: '4px' }}>{original.ar}</div>
+          {original.hintAr && <div style={{ color: AMBER.text, fontSize: '12px', marginTop: '6px' }}>💡 {original.hintAr}</div>}
+        </div>
+      )}
+
+      <textarea dir="ltr" style={{ ...T.textarea, ...T.english }} value={userText}
+        onChange={e => setUserText(e.target.value)} placeholder="Rewrite in your own words..." />
+      <button onClick={evaluate} disabled={!userText.trim() || !original || loading2} style={{ ...btn('primary', 'md'), marginTop: '8px' }}>
+        {loading2 ? <Spinner size={14} /> : <Send size={14} />} قيّم
+      </button>
+
+      {evalRes && (
+        <div style={{ ...T.cardInner, marginTop: '12px' }}>
+          <div style={{ fontSize: '24px', fontWeight: 800, textAlign: 'center' }}>{evalRes.score}/100</div>
+          <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', flexWrap: 'wrap', marginBottom: '8px' }}>
+            <span style={pill(evalRes.preservedMeaning ? 'success' : 'danger')}>
+              المعنى: {evalRes.preservedMeaning ? '✓' : '✗'}
+            </span>
+            <span style={pill(evalRes.differentEnough ? 'success' : 'danger')}>
+              صياغة جديدة: {evalRes.differentEnough ? '✓' : '✗'}
+            </span>
+          </div>
+          <div style={{ marginBottom: '8px' }}>{evalRes.feedbackAr}</div>
+          {evalRes.modelParaphrase && (
+            <>
+              <div style={T.label}>نموذج</div>
+              <div dir="ltr" style={{ ...T.english, fontStyle: 'italic' }}>{evalRes.modelParaphrase}</div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   Speaking Tab — recognition + shadowing + conversation
+============================================================ */
+function SpeakingTab({ words }) {
+  const [mode, setMode] = useState('shadow');
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <div style={T.card}>
+        <h2 style={T.h2}>تدريب التحدث</h2>
+        <div style={{ ...T.muted, marginTop: '4px', marginBottom: '12px' }}>
+          المحادثة تتحسّن بثلاث طرق: تقليد (shadowing)، تقييم النطق، ومحادثة سيناريو.
+        </div>
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+          <button onClick={() => setMode('shadow')} style={btn(mode === 'shadow' ? 'amber' : 'secondary', 'sm')}>
+            <Headphones size={14} /> تقليد (Shadowing)
+          </button>
+          <button onClick={() => setMode('pron')} style={btn(mode === 'pron' ? 'amber' : 'secondary', 'sm')}>
+            <Mic size={14} /> تقييم النطق
+          </button>
+          <button onClick={() => setMode('convo')} style={btn(mode === 'convo' ? 'amber' : 'secondary', 'sm')}>
+            <MessageCircle size={14} /> سيناريو محادثة
+          </button>
+        </div>
+      </div>
+      {mode === 'shadow' && <ShadowingMode words={words} />}
+      {mode === 'pron' && <PronunciationMode words={words} />}
+      {mode === 'convo' && <ConversationMode />}
+    </div>
+  );
+}
+
+function ShadowingMode({ words }) {
+  const [phrase, setPhrase] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [rate, setRate] = useState(0.85);
+
+  const fetchPhrase = async () => {
+    setLoading(true);
+    try {
+      const sample = shuffle(words).slice(0, 5).map(w => w.word);
+      const prompt =
+`Give ONE natural English spoken sentence (12-20 words) suitable for shadowing
+by a B2+ Arabic learner. Topic varies daily. Use everyday phrasing.
+${sample.length ? `Bonus if it naturally uses one of: ${JSON.stringify(sample)}.` : ''}
+Return ONLY JSON: { "sentence": "...", "ar": "ترجمة", "noteAr": "ملاحظة عن الإيقاع أو النبر" }`;
+      const t = await callAI(prompt);
+      const obj = extractJSON(t);
+      if (obj && obj.sentence) setPhrase(obj);
+    } finally { setLoading(false); }
+  };
+
+  useEffect(() => { fetchPhrase(); }, []); // eslint-disable-line
+
+  return (
+    <div style={T.card}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+        <h2 style={T.h2}>التقليد (Shadowing)</h2>
+        <button onClick={fetchPhrase} disabled={loading} style={btn('amber', 'sm')}>
+          {loading ? <Spinner size={14} /> : <RefreshCw size={14} />} جملة جديدة
+        </button>
+      </div>
+      <div style={{ ...T.muted, marginTop: '4px', marginBottom: '12px' }}>
+        استمع، ثم كرّر بنفس الإيقاع والنغمة. ابدأ بسرعة بطيئة وارفعها تدريجياً.
+      </div>
+
+      {phrase ? (
+        <div style={{ ...T.cardInner, background: AMBER.bg, borderColor: AMBER.border, marginBottom: '12px' }}>
+          <div dir="ltr" style={{ ...T.english, fontSize: '17px' }}>{phrase.sentence}</div>
+          <div style={{ color: AMBER.text, fontSize: '13px', marginTop: '4px' }}>{phrase.ar}</div>
+          {phrase.noteAr && <div style={{ color: AMBER.text, fontSize: '12px', marginTop: '6px' }}>💡 {phrase.noteAr}</div>}
+        </div>
+      ) : (
+        <div style={{ ...T.muted, textAlign: 'center', padding: '20px' }}>جاري التحميل...</div>
+      )}
+
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+        <span style={T.muted}>السرعة:</span>
+        {[0.65, 0.85, 1.0].map(r => (
+          <button key={r} onClick={() => setRate(r)} style={btn(rate === r ? 'amber' : 'secondary', 'sm')}>
+            {r === 0.65 ? 'بطيء' : r === 0.85 ? 'متوسط' : 'طبيعي'}
+          </button>
+        ))}
+        <button disabled={!phrase} onClick={() => speak(phrase.sentence, 'en-US', rate)} style={btn('primary', 'md')}>
+          <Play size={14} /> استمع
+        </button>
+        <button onClick={stopSpeaking} style={btn('secondary', 'md')}>
+          <Square size={14} /> أوقف
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PronunciationMode({ words }) {
+  const [target, setTarget] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [transcript, setTranscript] = useState('');
+  const [feedback, setFeedback] = useState(null);
+  const [evalLoading, setEvalLoading] = useState(false);
+  const [err, setErr] = useState('');
+  const recRef = useRef(null);
+  const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+
+  const fetchTarget = async () => {
+    setLoading(true); setTranscript(''); setFeedback(null); setErr('');
+    try {
+      const pool = shuffle(words).slice(0, 1);
+      if (pool.length) {
+        setTarget({ sentence: pool[0].examples?.[0]?.en || pool[0].word, ar: pool[0].examples?.[0]?.ar || pool[0].translation });
+      } else {
+        const prompt = `Give one English sentence (10-18 words, B2). Return JSON: {"sentence":"...","ar":"..."}`;
+        const t = await callAI(prompt);
+        const obj = extractJSON(t);
+        if (obj && obj.sentence) setTarget(obj);
+      }
+    } finally { setLoading(false); }
+  };
+
+  useEffect(() => { fetchTarget(); }, []); // eslint-disable-line
+
+  const startRec = () => {
+    if (!SR) { setErr('متصفحك لا يدعم التعرف على الصوت — جرّب Chrome'); return; }
+    const r = getRecognition();
+    if (!r) return;
+    setTranscript(''); setFeedback(null); setErr('');
+    let finalText = '';
+    r.onresult = (e) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += t + ' ';
+        else interim += t;
+      }
+      setTranscript((finalText + interim).trim());
+    };
+    r.onerror = (e) => { setErr('خطأ في التعرف: ' + (e.error || '')); setListening(false); };
+    r.onend = () => setListening(false);
+    r.start();
+    recRef.current = r;
+    setListening(true);
+  };
+  const stopRec = () => { try { recRef.current?.stop(); } catch {} setListening(false); };
+
+  const evaluatePronunciation = async () => {
+    if (!transcript.trim() || !target) return;
+    setEvalLoading(true);
+    try {
+      const prompt =
+`Target sentence: "${target.sentence}"
+What the learner said (auto-transcribed): "${transcript.trim()}"
+
+The transcript indirectly reflects pronunciation: words mis-recognized usually
+mean the learner mis-pronounced them. Compare word-by-word.
+
+Return ONLY JSON:
+{
+  "score": 0-100,
+  "matched": ["correctly recognized words"],
+  "issues": [{"word":"...","problemAr":"..."}],
+  "feedbackAr": "تغذية راجعة بالعربية مع نصيحة عملية"
+}`;
+      const t = await callAI(prompt);
+      const obj = extractJSON(t);
+      if (obj) setFeedback(obj);
+    } finally { setEvalLoading(false); }
+  };
+
+  return (
+    <div style={T.card}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+        <h2 style={T.h2}>تقييم النطق</h2>
+        <button onClick={fetchTarget} disabled={loading} style={btn('amber', 'sm')}>
+          {loading ? <Spinner size={14} /> : <RefreshCw size={14} />} جملة أخرى
+        </button>
+      </div>
+      <div style={{ ...T.muted, marginTop: '4px', marginBottom: '12px' }}>
+        استمع، ثم سجّل نفسك تنطق نفس الجملة. يقارن الذكاء بين النص المسموع والمتعرَّف.
+      </div>
+
+      {target && (
+        <div style={{ ...T.cardInner, background: AMBER.bg, borderColor: AMBER.border, marginBottom: '12px' }}>
+          <div dir="ltr" style={{ ...T.english, fontSize: '17px' }}>{target.sentence}</div>
+          <div style={{ color: AMBER.text, fontSize: '13px', marginTop: '4px' }}>{target.ar}</div>
+          <button onClick={() => speak(target.sentence)} style={{ ...btn('secondary', 'sm'), marginTop: '6px' }}>
+            <Volume2 size={12} /> استمع
+          </button>
+        </div>
+      )}
+
+      {!SR && (
+        <div style={{ ...pill('danger'), display: 'block', padding: '8px', marginBottom: '8px' }}>
+          متصفحك لا يدعم التعرف على الصوت. استخدم Chrome أو Edge.
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+        {!listening ? (
+          <button onClick={startRec} disabled={!SR} style={btn('danger', 'md')}>
+            <Mic size={16} /> ابدأ التسجيل
+          </button>
+        ) : (
+          <button onClick={stopRec} style={btn('primary', 'md')}>
+            <MicOff size={16} /> أوقف
+          </button>
+        )}
+        <button onClick={evaluatePronunciation} disabled={!transcript.trim() || evalLoading} style={btn('success', 'md')}>
+          {evalLoading ? <Spinner size={14} /> : <Send size={14} />} قيّم نطقي
+        </button>
+      </div>
+
+      {listening && <div style={{ ...pill('danger'), marginTop: '8px' }}>🔴 جاري الاستماع...</div>}
+      {transcript && (
+        <div style={{ ...T.cardInner, marginTop: '12px' }}>
+          <div style={T.label}>ما سُمع منك</div>
+          <div dir="ltr" style={T.english}>{transcript}</div>
+        </div>
+      )}
+      {err && <div style={{ color: 'var(--color-text-danger, #B91C1C)', marginTop: '8px', fontSize: '13px' }}>{err}</div>}
+
+      {feedback && (
+        <div style={{ ...T.cardInner, marginTop: '12px' }}>
+          <div style={{ fontSize: '28px', fontWeight: 800, textAlign: 'center', color: AMBER.text }}>{feedback.score}/100</div>
+          {feedback.issues && feedback.issues.length > 0 && (
+            <div style={{ marginTop: '10px' }}>
+              <div style={T.label}>كلمات تحتاج عناية</div>
+              {feedback.issues.map((it, i) => (
+                <div key={i} style={{ marginBottom: '8px' }}>
+                  <span dir="ltr" style={{ ...pill('danger'), ...T.english }}>{it.word}</span>
+                  <div style={{ ...T.muted, marginTop: '4px' }}>{it.problemAr}</div>
+                  <button onClick={() => speak(it.word, 'en-US', 0.7)} style={{ ...btn('amber', 'sm'), marginTop: '4px' }}>
+                    <Volume2 size={12} /> استمع بطيء
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ marginTop: '10px' }}>{feedback.feedbackAr}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConversationMode() {
+  const [scenario, setScenario] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [err, setErr] = useState('');
+  const recRef = useRef(null);
+  const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+
+  const newScenario = async () => {
+    setLoading(true); setHistory([]); setErr('');
+    try {
+      const prompt =
+`Create a realistic conversation scenario for a B2+ Arabic learner.
+Choose ONE from: job interview, doctor visit, legal consultation, ordering food,
+news interview, business meeting, customer complaint, academic discussion.
+
+Return ONLY JSON:
+{
+  "scenario": "short English description of the situation",
+  "ar": "وصف عربي للسيناريو",
+  "yourRole": "the learner's role in English",
+  "yourRoleAr": "دور المتعلم بالعربية",
+  "opening": "the AI's first English line as the other character (1-2 sentences)"
+}`;
+      const t = await callAI(prompt);
+      const obj = extractJSON(t);
+      if (obj) {
+        setScenario(obj);
+        setHistory([{ role: 'ai', text: obj.opening }]);
+      }
+    } catch { setErr('فشل توليد سيناريو'); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { newScenario(); }, []); // eslint-disable-line
+
+  const send = async () => {
+    if (!input.trim() || !scenario) return;
+    const newHistory = [...history, { role: 'user', text: input.trim() }];
+    setHistory(newHistory);
+    setInput(''); setLoading(true);
+    try {
+      const dialog = newHistory.map(m => `${m.role === 'ai' ? 'NPC' : 'LEARNER'}: ${m.text}`).join('\n');
+      const prompt =
+`Roleplay scenario: ${scenario.scenario}
+Learner's role: ${scenario.yourRole}
+
+Conversation so far:
+${dialog}
+
+Continue as NPC in 1-2 natural English sentences (B2 level).
+Also gently note one small issue in the learner's last message (if any) in Arabic — keep brief.
+
+Return ONLY JSON:
+{
+  "reply": "your NPC English reply",
+  "tipAr": "ملاحظة قصيرة بالعربية أو نص فارغ"
+}`;
+      const t = await callAI(prompt);
+      const obj = extractJSON(t);
+      if (obj) {
+        setHistory([...newHistory, { role: 'ai', text: obj.reply, tip: obj.tipAr }]);
+        speak(obj.reply);
+      }
+    } catch { setErr('تعذّر الرد'); }
+    finally { setLoading(false); }
+  };
+
+  const startRec = () => {
+    if (!SR) { setErr('التعرف على الصوت غير مدعوم'); return; }
+    const r = getRecognition();
+    if (!r) return;
+    r.onresult = (e) => {
+      let txt = '';
+      for (let i = 0; i < e.results.length; i++) txt += e.results[i][0].transcript;
+      setInput(txt.trim());
+    };
+    r.onerror = () => setListening(false);
+    r.onend = () => setListening(false);
+    r.start();
+    recRef.current = r;
+    setListening(true);
+  };
+  const stopRec = () => { try { recRef.current?.stop(); } catch {} setListening(false); };
+
+  return (
+    <div style={T.card}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+        <h2 style={T.h2}>سيناريو محادثة</h2>
+        <button onClick={newScenario} disabled={loading} style={btn('amber', 'sm')}>
+          {loading ? <Spinner size={14} /> : <RefreshCw size={14} />} سيناريو جديد
+        </button>
+      </div>
+
+      {scenario && (
+        <div style={{ ...T.cardInner, background: AMBER.bg, borderColor: AMBER.border, marginTop: '10px', marginBottom: '10px' }}>
+          <div style={{ color: AMBER.text, fontWeight: 600 }}>{scenario.ar}</div>
+          <div style={{ color: AMBER.text, fontSize: '13px', marginTop: '4px' }}>دورك: {scenario.yourRoleAr}</div>
+        </div>
+      )}
+
+      <div style={{ maxHeight: '320px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
+        {history.map((m, i) => (
+          <div key={i} style={{
+            ...T.cardInner,
+            alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
+            maxWidth: '85%',
+            background: m.role === 'user' ? 'var(--color-background-info, #E0F2FF)' : AMBER.bg,
+            borderColor: m.role === 'user' ? 'var(--color-text-info, #0369A1)' : AMBER.border,
+          }}>
+            <div dir="ltr" style={T.english}>{m.text}</div>
+            {m.role === 'ai' && (
+              <button onClick={() => speak(m.text)} style={{ ...btn('ghost', 'sm'), marginTop: '4px', padding: '2px 6px' }}>
+                <Volume2 size={12} />
+              </button>
+            )}
+            {m.tip && <div style={{ ...T.muted, marginTop: '6px', borderTop: '1px dashed', paddingTop: '4px' }}>💡 {m.tip}</div>}
+          </div>
+        ))}
+        {loading && <div style={T.muted}><Spinner size={14} /> يفكّر...</div>}
+      </div>
+
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+        <input
+          dir="ltr"
+          style={{ ...T.input, ...T.english, flex: 1, minWidth: '200px' }}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          placeholder="Reply in English..."
+          onKeyDown={e => { if (e.key === 'Enter') send(); }}
+        />
+        {SR && (
+          !listening ? (
+            <button onClick={startRec} style={btn('danger', 'md')}><Mic size={14} /></button>
+          ) : (
+            <button onClick={stopRec} style={btn('primary', 'md')}><MicOff size={14} /></button>
+          )
+        )}
+        <button onClick={send} disabled={!input.trim() || loading} style={btn('primary', 'md')}>
+          <Send size={14} />
+        </button>
+      </div>
+      {err && <div style={{ color: 'var(--color-text-danger, #B91C1C)', marginTop: '8px', fontSize: '13px' }}>{err}</div>}
+    </div>
+  );
+}
+
+/* ============================================================
+   Listening Tab
+============================================================ */
+function ListeningTab() {
+  const [domain, setDomain] = useState('daily');
+  const [content, setContent] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [showTranscript, setShowTranscript] = useState(false);
+  const [answers, setAnswers] = useState({});
+  const [showAnswers, setShowAnswers] = useState(false);
+  const [err, setErr] = useState('');
+
+  const fetchListening = async () => {
+    setLoading(true); setContent(null); setAnswers({}); setShowAnswers(false); setShowTranscript(false); setErr('');
+    try {
+      const d = DOMAINS.find(x => x.id === domain) || DOMAINS[0];
+      const prompt =
+`Generate a short English listening passage (60-90 words, B2 level) in the domain: ${d.en}.
+Style: like a news clip, briefing, or short narration. Natural spoken English.
+
+Then create 3 comprehension questions in Arabic with answer choices.
+
+Return ONLY JSON:
+{
+  "passage": "the English text",
+  "ar": "ترجمة عربية",
+  "questions": [
+    {"q":"السؤال بالعربية","choices":["خيار أ","خيار ب","خيار ج","خيار د"],"correctIndex":0,"explainAr":"شرح قصير"},
+    ...
+  ]
+}`;
+      const t = await callAI(prompt);
+      const obj = extractJSON(t);
+      if (!obj || !obj.passage) throw new Error();
+      setContent(obj);
+    } catch { setErr('تعذّر التوليد'); }
+    finally { setLoading(false); }
+  };
+
+  const score = useMemo(() => {
+    if (!content || !showAnswers) return null;
+    const total = content.questions.length;
+    let c = 0;
+    content.questions.forEach((q, i) => { if (answers[i] === q.correctIndex) c++; });
+    return { c, total, pct: Math.round((c / total) * 100) };
+  }, [showAnswers, answers, content]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <div style={T.card}>
+        <h2 style={T.h2}>تدريب الاستماع</h2>
+        <div style={{ ...T.muted, marginTop: '4px', marginBottom: '12px' }}>
+          استمع مرة بدون نص، حاول الإجابة، ثم اكشف النص للمقارنة (تعلّم لاواعي للنبر والإيقاع).
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
+          {DOMAINS.map(d => {
+            const I = d.icon;
+            return (
+              <button key={d.id} onClick={() => setDomain(d.id)} style={btn(domain === d.id ? 'amber' : 'secondary', 'sm')}>
+                <I size={12} /> {d.ar}
+              </button>
+            );
+          })}
+        </div>
+        <button onClick={fetchListening} disabled={loading} style={btn('primary', 'md')}>
+          {loading ? <Spinner size={14} /> : <Sparkles size={14} />} توليد مقطع
+        </button>
+        {err && <div style={{ color: 'var(--color-text-danger, #B91C1C)', marginTop: '8px', fontSize: '13px' }}>{err}</div>}
+      </div>
+
+      {content && (
+        <>
+          <div style={T.card}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+              <h2 style={T.h2}>المقطع</h2>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button onClick={() => speak(content.passage, 'en-US', 0.85)} style={btn('amber', 'sm')}>
+                  <Play size={14} /> استمع
+                </button>
+                <button onClick={stopSpeaking} style={btn('secondary', 'sm')}>
+                  <Square size={14} />
+                </button>
+                <button onClick={() => setShowTranscript(s => !s)} style={btn('secondary', 'sm')}>
+                  {showTranscript ? <EyeOff size={14} /> : <Eye size={14} />}
+                  {showTranscript ? ' أخفِ النص' : ' أظهر النص'}
+                </button>
+              </div>
+            </div>
+            {showTranscript && (
+              <div style={{ ...T.cardInner, marginTop: '10px', background: AMBER.bg, borderColor: AMBER.border }}>
+                <div dir="ltr" style={{ ...T.english, lineHeight: 1.7 }}>{content.passage}</div>
+                <div style={{ color: AMBER.text, fontSize: '13px', marginTop: '8px' }}>{content.ar}</div>
+              </div>
+            )}
+          </div>
+
+          <div style={T.card}>
+            <h2 style={T.h2}>أسئلة الاستيعاب</h2>
+            <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {content.questions.map((q, i) => (
+                <div key={i} style={T.cardInner}>
+                  <div style={{ fontWeight: 600, marginBottom: '8px' }}>{i + 1}. {q.q}</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {q.choices.map((c, ci) => {
+                      const chosen = answers[i] === ci;
+                      let variant = 'secondary';
+                      if (showAnswers) {
+                        if (ci === q.correctIndex) variant = 'success';
+                        else if (chosen) variant = 'danger';
+                      } else if (chosen) variant = 'amber';
+                      return (
+                        <button key={ci} onClick={() => !showAnswers && setAnswers(a => ({ ...a, [i]: ci }))}
+                          style={{ ...btn(variant, 'sm'), justifyContent: 'flex-start' }}>
+                          {c}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {showAnswers && q.explainAr && (
+                    <div style={{ ...T.muted, marginTop: '6px' }}>💡 {q.explainAr}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: '12px', display: 'flex', gap: '6px' }}>
+              <button onClick={() => setShowAnswers(true)}
+                disabled={Object.keys(answers).length < content.questions.length || showAnswers}
+                style={btn('primary', 'md')}>
+                <Check size={14} /> تحقّق
+              </button>
+            </div>
+            {score && (
+              <div style={{ ...T.cardInner, marginTop: '12px', textAlign: 'center', background: AMBER.bg, borderColor: AMBER.border }}>
+                <div style={{ fontSize: '28px', fontWeight: 800, color: AMBER.text }}>{score.c} / {score.total}</div>
+                <div style={{ color: AMBER.text }}>{score.pct}%</div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   Main App
+============================================================ */
+/* ============================================================
+   Translate Tab — contextual translation (paste / mic input)
+============================================================ */
+const TRANSLATIONS_KEY = 'linguaflow_translations_v1';
+
+function TranslateTab({ words, saveWords }) {
+  const [inputMode, setInputMode] = useState('paste');
+  const [input, setInput] = useState('');
+  const [interim, setInterim] = useState('');
+  const [domain, setDomain] = useState('daily');
+  const [listening, setListening] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState('');
+  const [result, setResult] = useState(null);
+  const [showOriginal, setShowOriginal] = useState(true);
+  const [addedWords, setAddedWords] = useState({});
+  const [history, setHistory] = useState([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const recRef = useRef(null);
+
+  const SR = typeof window !== 'undefined'
+    ? (window.SpeechRecognition || window.webkitSpeechRecognition)
+    : null;
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(TRANSLATIONS_KEY);
+      if (raw) setHistory(JSON.parse(raw) || []);
+    } catch {}
+    return () => {
+      try { recRef.current?.stop(); } catch {}
+      setListening(false);
+    };
+  }, []);
+
+  const persistHistory = (next) => {
+    setHistory(next);
+    try { localStorage.setItem(TRANSLATIONS_KEY, JSON.stringify(next.slice(0, 20))); } catch {}
+  };
+
+  const startRec = () => {
+    if (!SR) { setErr('متصفحك لا يدعم التعرف على الصوت — جرّب Chrome'); return; }
+    const r = new SR();
+    r.lang = 'en-US';
+    r.continuous = true;
+    r.interimResults = true;
+    r.maxAlternatives = 1;
+    r.onresult = (e) => {
+      let finalChunk = '';
+      let interimChunk = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalChunk += t + ' ';
+        else interimChunk += t;
+      }
+      if (finalChunk) setInput(prev => (prev ? prev + ' ' : '') + finalChunk.trim());
+      setInterim(interimChunk);
+    };
+    r.onerror = (e) => { setErr('خطأ في التعرف: ' + (e.error || '')); setListening(false); };
+    r.onend = () => { setListening(false); setInterim(''); };
+    try { r.start(); recRef.current = r; setListening(true); setErr(''); }
+    catch (e) { setErr('تعذّر بدء التسجيل'); }
+  };
+  const stopRec = () => { try { recRef.current?.stop(); } catch {} setListening(false); };
+
+  const pasteFromClipboard = async () => {
+    try {
+      const t = await navigator.clipboard.readText();
+      if (t) setInput(prev => prev ? prev + '\n' + t : t);
+    } catch { setErr('تعذّر القراءة من الحافظة — ألصق يدوياً'); }
+  };
+
+  const translate = async () => {
+    if (!input.trim()) return;
+    setLoading(true); setErr(''); setResult(null); setAddedWords({});
+    try {
+      const d = DOMAIN_MAP[domain] || DOMAIN_MAP.daily;
+      const prompt =
+`You are a contextual translation assistant for an Arabic-speaking B2+ learner.
+The text is in the "${d.en}" context.
+
+Return ONLY JSON (no fences, no commentary):
+{
+  "translation": "الترجمة العربية الكاملة، تراعي السياق التخصصي والاصطلاحات",
+  "summary": "ملخص جملة-جملتان بالعربية",
+  "keyTerms": [{"en":"term","ar":"ترجمة","explanationAr":"شرح في هذا السياق"}],
+  "idioms": [{"phrase":"...","literalAr":"حرفياً","meaningAr":"المعنى الفعلي"}],
+  "culturalNotes": "ملاحظات ثقافية/سياقية أو فارغ",
+  "suggestedWords": [
+    {"word":"...","definitionEn":"...","definitionAr":"...","exampleEn":"...","exampleAr":"...","domain":"${d.id}"}
+  ]
+}
+
+Source:
+"""
+${input.trim()}
+"""`;
+      const text = await callAI(prompt, null, 3500);
+      const obj = extractJSON(text);
+      if (!obj || !obj.translation) throw new Error('parse');
+      setResult(obj);
+      const entry = {
+        id: Date.now(),
+        domain: d.id,
+        source: input.trim(),
+        result: obj,
+        at: new Date().toISOString(),
+      };
+      persistHistory([entry, ...history].slice(0, 20));
+    } catch (e) {
+      if (e.code === 'NO_API_KEY') setErr('أدخل مفتاح API من زر الإعدادات');
+      else if (e.code === 'INVALID_KEY') setErr('مفتاح API غير صالح — راجع الإعدادات');
+      else setErr('تعذّرت الترجمة — حاول مجدداً');
+    } finally { setLoading(false); }
+  };
+
+  const addSuggestedWord = async (sw, key) => {
+    if (!sw || !sw.word) return;
+    const exists = words.find(w => w.word?.toLowerCase() === sw.word.toLowerCase());
+    if (exists) { setAddedWords(a => ({ ...a, [key]: 'exists' })); return; }
+    const newWord = {
+      id: Date.now() + Math.floor(Math.random() * 1000),
+      word: sw.word,
+      translation: sw.definitionAr || '',
+      partOfSpeech: '',
+      definition: sw.definitionEn || '',
+      pronunciation: '',
+      register: 'neutral',
+      domain: sw.domain || domain,
+      examples: (sw.exampleEn ? [{ en: sw.exampleEn, ar: sw.exampleAr || '' }] : []),
+      collocations: [],
+      synonyms: [],
+      speakingTip: '',
+      writingTip: '',
+      commonMistake: '',
+      tags: ['translate'],
+      status: 'new',
+      addedAt: new Date().toISOString(),
+      lastReviewed: '',
+      reviewCount: 0,
+      srsInterval: 0,
+      srsEase: 2.5,
+      srsDue: Date.now(),
+    };
+    await saveWords([newWord, ...words]);
+    setAddedWords(a => ({ ...a, [key]: 'added' }));
+  };
+
+  const restoreHistory = (entry) => {
+    setInput(entry.source);
+    setDomain(entry.domain);
+    setResult(entry.result);
+    setAddedWords({});
+    setShowOriginal(true);
+    setHistoryOpen(false);
+  };
+  const deleteHistory = (id) => {
+    persistHistory(history.filter(h => h.id !== id));
+  };
+
+  const charCount = input.length;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <div style={T.card}>
+        <h2 style={T.h2}>الترجمة السياقية</h2>
+        <div style={{ ...T.muted, marginTop: '4px', marginBottom: '12px' }}>
+          ألصق نصاً إنجليزياً أو سجّل من ميكروفونك (transcript من فيديو، مقال، خطاب)،
+          واختر المجال للحصول على ترجمة تراعي السياق + مصطلحات + كلمات مقترحة.
+        </div>
+
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
+          <button onClick={() => setInputMode('paste')} style={btn(inputMode === 'paste' ? 'amber' : 'secondary', 'sm')}>
+            <ClipboardPaste size={14} /> لصق نص
+          </button>
+          {SR && (
+            <button onClick={() => setInputMode('mic')} style={btn(inputMode === 'mic' ? 'amber' : 'secondary', 'sm')}>
+              <Mic size={14} /> تسجيل من ميكروفون
+            </button>
+          )}
+        </div>
+
+        {inputMode === 'paste' && (
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <label style={T.label}>النص الإنجليزي</label>
+              <button onClick={pasteFromClipboard} style={btn('ghost', 'sm')}>
+                <ClipboardPaste size={12} /> من الحافظة
+              </button>
+            </div>
+            <textarea
+              dir="ltr"
+              style={{ ...T.textarea, ...T.english, minHeight: '160px' }}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              placeholder="ألصق النص الإنجليزي هنا (transcript من YouTube، مقال، إلخ)..."
+            />
+            <div style={{ ...T.muted, marginTop: '4px', textAlign: 'left' }}>
+              {charCount} حرفاً
+            </div>
+          </div>
+        )}
+
+        {inputMode === 'mic' && (
+          <div>
+            <div style={{ ...T.muted, marginBottom: '8px' }}>
+              💡 شغّل الفيديو/الصوت على جهازك واترك الميكروفون يلتقط. العبارات الطويلة مدعومة (التسجيل مستمر).
+            </div>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
+              {!listening ? (
+                <button onClick={startRec} style={btn('danger', 'md')}>
+                  <Mic size={14} /> ابدأ التسجيل
+                </button>
+              ) : (
+                <button onClick={stopRec} style={btn('primary', 'md')}>
+                  <MicOff size={14} /> أوقف
+                </button>
+              )}
+              <button onClick={() => { setInput(''); setInterim(''); }} style={btn('secondary', 'md')}>
+                <X size={14} /> امسح
+              </button>
+              {listening && <span style={pill('danger')}>🔴 جاري الاستماع...</span>}
+            </div>
+            <div dir="ltr" style={{
+              ...T.cardInner,
+              ...T.english,
+              minHeight: '140px',
+              maxHeight: '260px',
+              overflowY: 'auto',
+              whiteSpace: 'pre-wrap',
+              lineHeight: 1.6,
+            }}>
+              {input}
+              {interim && <span style={{ opacity: 0.5 }}> {interim}</span>}
+              {!input && !interim && <span style={{ ...T.muted, fontStyle: 'italic' }}>(لم يلتقط نص بعد)</span>}
+            </div>
+            <div style={{ ...T.muted, marginTop: '4px', textAlign: 'left' }}>
+              {charCount} حرفاً
+            </div>
+          </div>
+        )}
+
+        <div style={{ marginTop: '14px' }}>
+          <div style={T.label}>السياق</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            {DOMAINS.map(d => {
+              const I = d.icon;
+              return (
+                <button key={d.id} onClick={() => setDomain(d.id)} style={btn(domain === d.id ? 'amber' : 'secondary', 'sm')}>
+                  <I size={12} /> {d.ar}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div style={{ marginTop: '14px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button onClick={translate} disabled={!input.trim() || loading} style={btn('primary', 'md')}>
+            {loading ? <Spinner size={14} /> : <Languages size={14} />} ترجم
+          </button>
+          {(input || result) && (
+            <button onClick={() => { setInput(''); setResult(null); setErr(''); setAddedWords({}); setInterim(''); }} style={btn('ghost', 'md')}>
+              <X size={14} /> مسح الكل
+            </button>
+          )}
+        </div>
+
+        {err && <div style={{ color: 'var(--color-text-danger, #B91C1C)', marginTop: '10px', fontSize: '13px' }}>{err}</div>}
+      </div>
+
+      {result && (
+        <>
+          <div style={T.card}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', flexWrap: 'wrap', gap: '6px' }}>
+              <h2 style={T.h2}>الترجمة</h2>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button onClick={() => setShowOriginal(s => !s)} style={btn('secondary', 'sm')}>
+                  {showOriginal ? <EyeOff size={14} /> : <Eye size={14} />}
+                  {showOriginal ? ' إخفاء الأصل' : ' إظهار الأصل'}
+                </button>
+                <button onClick={() => speak(input)} style={btn('amber', 'sm')}>
+                  <Volume2 size={14} /> استمع
+                </button>
+                <button onClick={stopSpeaking} style={btn('ghost', 'sm')}>
+                  <Square size={14} />
+                </button>
+              </div>
+            </div>
+
+            {showOriginal && (
+              <div style={{ ...T.cardInner, marginBottom: '10px' }}>
+                <div style={T.label}>النص الأصلي</div>
+                <div dir="ltr" style={{ ...T.english, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{input}</div>
+              </div>
+            )}
+
+            <div style={{ ...T.cardInner, background: AMBER.bg, borderColor: AMBER.border }}>
+              <div style={{ ...T.label, color: AMBER.text }}>الترجمة العربية</div>
+              <div style={{ color: AMBER.text, lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>{result.translation}</div>
+            </div>
+
+            {result.summary && (
+              <div style={{ ...T.cardInner, marginTop: '10px', background: 'var(--color-background-info, #E0F2FF)', borderColor: 'var(--color-text-info, #0369A1)' }}>
+                <div style={{ ...T.label, color: 'var(--color-text-info, #0369A1)' }}>الملخص</div>
+                <div style={{ color: 'var(--color-text-info, #0369A1)' }}>{result.summary}</div>
+              </div>
+            )}
+          </div>
+
+          {result.keyTerms && result.keyTerms.length > 0 && (
+            <div style={T.card}>
+              <h2 style={T.h2}>المصطلحات الرئيسية</h2>
+              <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {result.keyTerms.map((t, i) => (
+                  <div key={i} style={T.cardInner}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <div dir="ltr" style={{ ...T.english, fontSize: '16px', fontWeight: 700 }}>{t.en}</div>
+                      <button onClick={() => speak(t.en)} style={btn('ghost', 'sm')}>
+                        <Volume2 size={12} />
+                      </button>
+                    </div>
+                    <div style={{ marginTop: '4px' }}>
+                      <span style={pill('amber')}>{t.ar}</span>
+                    </div>
+                    {t.explanationAr && (
+                      <div style={{ ...T.muted, marginTop: '6px' }}>{t.explanationAr}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {result.idioms && result.idioms.length > 0 && (
+            <div style={T.card}>
+              <h2 style={T.h2}>عبارات اصطلاحية</h2>
+              <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {result.idioms.map((id, i) => (
+                  <div key={i} style={T.cardInner}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <div dir="ltr" style={{ ...T.english, fontSize: '15px', fontWeight: 600 }}>{id.phrase}</div>
+                      <button onClick={() => speak(id.phrase)} style={btn('ghost', 'sm')}>
+                        <Volume2 size={12} />
+                      </button>
+                    </div>
+                    {id.literalAr && (
+                      <div style={{ ...T.muted, marginTop: '4px', fontStyle: 'italic' }}>
+                        حرفياً: {id.literalAr}
+                      </div>
+                    )}
+                    {id.meaningAr && (
+                      <div style={{ marginTop: '4px' }}>
+                        <span style={pill('amber')}>المعنى الفعلي</span>{' '}
+                        <span>{id.meaningAr}</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {result.culturalNotes && result.culturalNotes.trim() && (
+            <div style={T.card}>
+              <h2 style={T.h2}>ملاحظات سياقية / ثقافية</h2>
+              <div style={{ ...T.cardInner, marginTop: '10px', background: 'var(--color-background-success, #E7F6EA)', borderColor: 'var(--color-text-success, #157A42)' }}>
+                <div style={{ color: 'var(--color-text-success, #157A42)' }}>{result.culturalNotes}</div>
+              </div>
+            </div>
+          )}
+
+          {result.suggestedWords && result.suggestedWords.length > 0 && (
+            <div style={T.card}>
+              <h2 style={T.h2}>كلمات مقترحة للحفظ</h2>
+              <div style={{ ...T.muted, marginTop: '4px', marginBottom: '10px' }}>
+                مصطلحات استخرجها الذكاء من النص — أضفها لمكتبتك لتدخل في دورة المراجعة.
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {result.suggestedWords.map((sw, i) => {
+                  const key = `${sw.word}-${i}`;
+                  const state = addedWords[key];
+                  return (
+                    <div key={key} style={T.cardInner}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', flexWrap: 'wrap' }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div dir="ltr" style={{ ...T.english, fontSize: '17px', fontWeight: 700 }}>{sw.word}</div>
+                          {sw.definitionEn && (
+                            <div dir="ltr" style={{ ...T.muted, fontFamily: 'Georgia, serif', fontStyle: 'italic', marginTop: '2px' }}>
+                              {sw.definitionEn}
+                            </div>
+                          )}
+                          {sw.definitionAr && (
+                            <div style={{ fontSize: '14px', marginTop: '4px' }}>{sw.definitionAr}</div>
+                          )}
+                          {sw.exampleEn && (
+                            <div style={{ marginTop: '6px', paddingInlineStart: '8px', borderInlineStart: `2px solid ${AMBER.border}` }}>
+                              <div dir="ltr" style={{ ...T.english, fontSize: '13px' }}>{sw.exampleEn}</div>
+                              {sw.exampleAr && <div style={{ ...T.muted, fontSize: '12px' }}>{sw.exampleAr}</div>}
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          <button onClick={() => speak(sw.word)} style={btn('ghost', 'sm')}>
+                            <Volume2 size={12} />
+                          </button>
+                          {state === 'added' ? (
+                            <span style={pill('success')}><Check size={12} /> أُضيفت</span>
+                          ) : state === 'exists' ? (
+                            <span style={pill('neutral')}>موجودة</span>
+                          ) : (
+                            <button onClick={() => addSuggestedWord(sw, key)} style={btn('amber', 'sm')}>
+                              <Plus size={12} /> أضف
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      <div style={T.card}>
+        <button
+          onClick={() => setHistoryOpen(o => !o)}
+          style={{
+            ...btn('ghost', 'md'),
+            width: '100%',
+            justifyContent: 'space-between',
+            padding: '4px 0',
+          }}
+        >
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+            <History size={14} /> سجل الترجمات ({history.length})
+          </span>
+          {historyOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
+        {historyOpen && (
+          <div style={{ marginTop: '10px' }}>
+            {history.length === 0 ? (
+              <div style={{ ...T.muted, textAlign: 'center', padding: '12px' }}>لا توجد ترجمات محفوظة بعد.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {history.map(h => {
+                  const d = DOMAIN_MAP[h.domain];
+                  return (
+                    <div key={h.id} style={T.cardInner}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '4px' }}>
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                          {d && <span style={pill('amber')}>{d.ar}</span>}
+                          <span style={T.muted}>{new Date(h.at).toLocaleString('ar')}</span>
+                        </div>
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                          <button onClick={() => restoreHistory(h)} style={btn('secondary', 'sm')}>
+                            استعادة
+                          </button>
+                          <button onClick={() => deleteHistory(h.id)} style={btn('ghost', 'sm')}>
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      </div>
+                      <div dir="ltr" style={{ ...T.english, fontSize: '13px', maxHeight: '60px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {h.source.slice(0, 200)}{h.source.length > 200 ? '...' : ''}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LinguaFlow() {
+  const [tab, setTab] = useState('add');
+  const [words, setWords] = useState([]);
+  const [stats, setStats] = useState({ streak: 0, lastDay: '', totalLearned: 0, accuracy: 0, sessions: 0 });
+  const [settings, setSettings] = useState({ wodDate: '', wod: null });
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const w = (await storageGet(STORAGE_KEY)) || [];
+      const s = (await storageGet(STATS_KEY)) || { streak: 0, lastDay: '', totalLearned: 0, accuracy: 0, sessions: 0 };
+      const cfg = (await storageGet(SETTINGS_KEY)) || { wodDate: '', wod: null };
+      setWords(w);
+      const today = todayStr();
+      let nextStats = s;
+      if (s.lastDay !== today) {
+        const y = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+        nextStats = { ...s, streak: s.lastDay === y ? (s.streak || 0) + 1 : 1, lastDay: today };
+        await storageSet(STATS_KEY, nextStats);
+      }
+      setStats(nextStats);
+      setSettings(cfg);
+      setLoaded(true);
+    })();
+  }, []);
+
+  const saveWords = useCallback(async (w) => { setWords(w); await storageSet(STORAGE_KEY, w); }, []);
+  const saveStats = useCallback(async (s) => { setStats(s); await storageSet(STATS_KEY, s); }, []);
+  const saveSettings = useCallback(async (s) => { setSettings(s); await storageSet(SETTINGS_KEY, s); }, []);
+
+  const addWodToLibrary = useCallback(async (wod) => {
+    if (!wod) return;
+    if (words.find(w => w.word?.toLowerCase() === wod.word.toLowerCase())) return;
+    const newWord = {
+      id: Date.now(),
+      ...wod,
+      tags: ['word-of-day'],
+      status: 'new',
+      addedAt: new Date().toISOString(),
+      lastReviewed: '',
+      reviewCount: 0,
+      srsInterval: 0,
+      srsEase: 2.5,
+      srsDue: Date.now(),
+    };
+    await saveWords([newWord, ...words]);
+  }, [words, saveWords]);
+
+  const tabs = [
+    { id: 'add',       label: 'إضافة',    icon: Plus },
+    { id: 'library',   label: 'المكتبة',  icon: BookOpen },
+    { id: 'review',    label: 'مراجعة',   icon: Brain },
+    { id: 'translate', label: 'الترجمة',  icon: Languages },
+    { id: 'writing',   label: 'الكتابة',  icon: PenLine },
+    { id: 'speaking',  label: 'التحدث',   icon: Mic },
+    { id: 'listening', label: 'الاستماع', icon: Headphones },
+  ];
+
+  if (!loaded) {
+    return (
+      <div dir="rtl" style={{
+        minHeight: '100vh',
+        background: 'var(--color-background-primary)',
+        color: 'var(--color-text-secondary)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontFamily: 'system-ui, sans-serif',
+      }}>
+        <Spinner size={20} /> &nbsp; جاري التحميل...
+      </div>
+    );
+  }
+
+  return (
+    <div dir="rtl" style={{
+      minHeight: '100vh',
+      background: 'var(--color-background-primary)',
+      color: 'var(--color-text-primary)',
+      fontFamily: 'system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif',
+      padding: '16px',
+    }}>
+      <style>{`
+        @keyframes lf-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        button:hover { opacity: 0.92; }
+        button:active { transform: scale(0.98); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+      `}</style>
+      <div style={{ maxWidth: '960px', margin: '0 auto' }}>
+        <Header stats={stats} wordsCount={words.length} />
+        <WordOfDay words={words} settings={settings} saveSettings={saveSettings} onSave={addWodToLibrary} />
+        <TabBar tabs={tabs} active={tab} onChange={setTab} />
+        <div>
+          {tab === 'add'       && <AddTab     words={words} saveWords={saveWords} />}
+          {tab === 'library'   && <LibraryTab words={words} saveWords={saveWords} />}
+          {tab === 'review'    && <ReviewTab  words={words} saveWords={saveWords} stats={stats} saveStats={saveStats} />}
+          {tab === 'translate' && <TranslateTab words={words} saveWords={saveWords} />}
+          {tab === 'writing'   && <WritingTab words={words} />}
+          {tab === 'speaking'  && <SpeakingTab words={words} />}
+          {tab === 'listening' && <ListeningTab />}
+        </div>
+        <div style={{ ...T.muted, textAlign: 'center', marginTop: '20px', padding: '14px 0' }}>
+          LinguaFlow · مصمم للمتعلمين العرب (مستوى B2+) · ركّز على الكمية + التغذية الراجعة + التكرار المتباعد
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+createRoot(document.getElementById('root')).render(<LinguaFlow />);
+</script>
+</body>
+</html>
