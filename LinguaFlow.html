@@ -1698,7 +1698,7 @@ function WritingTab({ words }) {
       <div style={T.card}>
         <h2 style={T.h2}>تدريبات الكتابة</h2>
         <div style={{ ...T.muted, marginTop: '4px', marginBottom: '12px' }}>
-          مهارة الكتابة تتطور بالكمية + التغذية الراجعة. أربعة أساليب مكمّلة:
+          مهارة الكتابة تتطور بالكمية + التغذية الراجعة. خمسة أساليب مكمّلة:
         </div>
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
           <button onClick={() => setMode('essay')} style={btn(mode === 'essay' ? 'amber' : 'secondary', 'sm')}>
@@ -1713,12 +1713,295 @@ function WritingTab({ words }) {
           <button onClick={() => setMode('challenge')} style={btn(mode === 'challenge' ? 'amber' : 'secondary', 'sm')}>
             <Languages size={14} /> تحدّي ترجمة
           </button>
+          <button onClick={() => setMode('style')} style={btn(mode === 'style' ? 'amber' : 'secondary', 'sm')}>
+            <Sparkles size={14} /> تحويل المستوى
+          </button>
         </div>
       </div>
       {mode === 'essay' && <EssayMode words={words} />}
       {mode === 'builder' && <BuilderMode words={words} />}
       {mode === 'paraphrase' && <ParaphraseMode />}
       {mode === 'challenge' && <TranslationChallengeMode />}
+      {mode === 'style' && <StyleTransformMode />}
+    </div>
+  );
+}
+
+const STYLE_LEVELS = [
+  { id: 'informal', ar: 'عامية',   en: 'informal' },
+  { id: 'formal',   ar: 'رسمية',   en: 'formal' },
+  { id: 'academic', ar: 'أكاديمية', en: 'academic' },
+  { id: 'legal',    ar: 'قانونية', en: 'legal' },
+];
+const STYLE_LEVEL_MAP = Object.fromEntries(STYLE_LEVELS.map(l => [l.id, l]));
+
+function StyleTransformMode() {
+  const [submode, setSubmode] = useState('show');
+  const [input, setInput] = useState('');
+  const [versions, setVersions] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState('');
+
+  // practice state
+  const [targetLevel, setTargetLevel] = useState('formal');
+  const [userText, setUserText] = useState('');
+  const [evaluation, setEvaluation] = useState(null);
+  const [loadingEval, setLoadingEval] = useState(false);
+  const [showModel, setShowModel] = useState(false);
+
+  const generate = async () => {
+    if (!input.trim()) return;
+    setLoading(true); setErr(''); setVersions(null);
+    try {
+      const prompt =
+`Rewrite the following English text in FOUR distinct registers for a B2+ Arabic learner.
+Levels: informal (everyday/colloquial), formal (professional), academic (scholarly), legal (contract/court phrasing).
+Each version must convey the same core meaning but use vocabulary, sentence structure, and tone appropriate to its level.
+For each, add a short Arabic note describing what changed (vocabulary, sentence structure, register markers).
+
+Return ONLY JSON (no fences):
+{
+  "versions": [
+    {"level":"informal","en":"...","ar":"الترجمة العربية","noteAr":"ما الذي تغيّر"},
+    {"level":"formal","en":"...","ar":"...","noteAr":"..."},
+    {"level":"academic","en":"...","ar":"...","noteAr":"..."},
+    {"level":"legal","en":"...","ar":"...","noteAr":"..."}
+  ]
+}
+
+Source:
+"""
+${input.trim()}
+"""`;
+      const t = await callAI(prompt, null, 2500);
+      const obj = extractJSON(t);
+      if (!obj || !Array.isArray(obj.versions)) throw new Error('parse');
+      setVersions(obj.versions);
+    } catch (e) {
+      if (e.code === 'NO_API_KEY') setErr('أدخل مفتاح API من زر الإعدادات');
+      else if (e.code === 'INVALID_KEY') setErr('مفتاح API غير صالح');
+      else setErr('تعذّر التوليد — حاول مجدداً');
+    } finally { setLoading(false); }
+  };
+
+  const evaluate = async () => {
+    if (!input.trim() || !userText.trim()) return;
+    setLoadingEval(true); setErr(''); setEvaluation(null); setShowModel(false);
+    try {
+      const lvl = STYLE_LEVEL_MAP[targetLevel] || STYLE_LEVEL_MAP.formal;
+      const prompt =
+`A learner was asked to rewrite an English source text at the "${lvl.en}" level.
+
+Source text:
+"""
+${input.trim()}
+"""
+
+Learner's attempt:
+"""
+${userText.trim()}
+"""
+
+Evaluate: (1) how well it fits the target ${lvl.en} register, (2) grammatical correctness,
+(3) naturalness, (4) preservation of original meaning. Be specific.
+
+Return ONLY JSON:
+{
+  "score": 0-100,
+  "registerFit": 0-100,
+  "grammar": 0-100,
+  "naturalness": 0-100,
+  "meaningPreserved": true|false,
+  "overallAr": "تقييم شامل بالعربية",
+  "corrections": [
+    {"original":"the exact learner phrase","corrected":"better English","noteAr":"شرح بالعربية"}
+  ],
+  "registerMissesAr": ["كلمات/تراكيب لا تناسب المستوى المستهدف"],
+  "modelVersion": "an excellent rewrite at the target register",
+  "encouragementAr": "رسالة تشجيع قصيرة بالعربية"
+}`;
+      const t = await callAI(prompt, null, 2000);
+      const obj = extractJSON(t);
+      if (!obj) throw new Error('parse');
+      setEvaluation(obj);
+    } catch (e) {
+      if (e.code === 'NO_API_KEY') setErr('أدخل مفتاح API من زر الإعدادات');
+      else if (e.code === 'INVALID_KEY') setErr('مفتاح API غير صالح');
+      else setErr('تعذّر التقييم');
+    } finally { setLoadingEval(false); }
+  };
+
+  return (
+    <div style={T.card}>
+      <h2 style={T.h2}>تحويل المستوى اللغوي</h2>
+      <div style={{ ...T.muted, marginTop: '4px', marginBottom: '10px' }}>
+        ألصق نصاً إنجليزياً وشاهد كيف يتغيّر عبر المستويات الأربعة، أو دَرّب نفسك على إعادة كتابته بمستوى محدد.
+      </div>
+
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '10px' }}>
+        <button onClick={() => setSubmode('show')} style={btn(submode === 'show' ? 'amber' : 'secondary', 'sm')}>
+          <Eye size={14} /> عرض المستويات
+        </button>
+        <button onClick={() => setSubmode('practice')} style={btn(submode === 'practice' ? 'amber' : 'secondary', 'sm')}>
+          <PenLine size={14} /> تدريب
+        </button>
+      </div>
+
+      <label style={T.label}>النص الإنجليزي</label>
+      <textarea
+        dir="ltr"
+        style={{ ...T.textarea, ...T.english, minHeight: '110px' }}
+        value={input}
+        onChange={e => setInput(e.target.value)}
+        placeholder="Paste English text to transform..."
+      />
+
+      {submode === 'show' && (
+        <div style={{ marginTop: '10px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button onClick={generate} disabled={!input.trim() || loading} style={btn('primary', 'md')}>
+            {loading ? <Spinner size={14} /> : <Sparkles size={14} />} ولّد المستويات الأربعة
+          </button>
+          <button onClick={() => setVersions(null)} disabled={!versions} style={btn('ghost', 'md')}>
+            <X size={14} /> مسح
+          </button>
+        </div>
+      )}
+
+      {submode === 'practice' && (
+        <>
+          <div style={{ marginTop: '12px' }}>
+            <div style={T.label}>المستوى المستهدف</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+              {STYLE_LEVELS.map(l => (
+                <button key={l.id} onClick={() => setTargetLevel(l.id)} style={btn(targetLevel === l.id ? 'amber' : 'secondary', 'sm')}>
+                  {l.ar}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ marginTop: '10px' }}>
+            <label style={T.label}>محاولتك بإعادة الكتابة عند مستوى «{STYLE_LEVEL_MAP[targetLevel]?.ar}»</label>
+            <textarea
+              dir="ltr"
+              style={{ ...T.textarea, ...T.english }}
+              value={userText}
+              onChange={e => setUserText(e.target.value)}
+              placeholder={`Rewrite the source text in ${STYLE_LEVEL_MAP[targetLevel]?.en} English...`}
+            />
+          </div>
+          <div style={{ marginTop: '10px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <button onClick={evaluate} disabled={!input.trim() || !userText.trim() || loadingEval} style={btn('primary', 'md')}>
+              {loadingEval ? <Spinner size={14} /> : <Send size={14} />} قيّم محاولتي
+            </button>
+            <button onClick={() => speak(userText)} disabled={!userText.trim()} style={btn('amber', 'md')}>
+              <Volume2 size={14} /> استمع لمحاولتي
+            </button>
+          </div>
+        </>
+      )}
+
+      {err && <div style={{ color: 'var(--color-text-danger, #B91C1C)', marginTop: '10px', fontSize: '13px' }}>{err}</div>}
+
+      {submode === 'show' && versions && versions.length > 0 && (
+        <div style={{ marginTop: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {versions.map((v, i) => {
+            const lvl = STYLE_LEVEL_MAP[v.level] || { ar: v.level, en: v.level };
+            return (
+              <div key={i} style={T.cardInner}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                  <span style={pill('amber')}>{lvl.ar}</span>
+                  <button onClick={() => speak(v.en)} style={btn('amber', 'sm')}>
+                    <Volume2 size={12} /> استمع
+                  </button>
+                </div>
+                {v.en && <div dir="ltr" style={{ ...T.english, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{v.en}</div>}
+                {v.ar && <div style={{ ...T.muted, fontSize: '13px', marginTop: '6px' }}>{v.ar}</div>}
+                {v.noteAr && (
+                  <div style={{ marginTop: '6px', color: AMBER.text, background: AMBER.bg, padding: '6px 8px', borderRadius: '6px', fontSize: '12px' }}>
+                    💡 {v.noteAr}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {submode === 'practice' && evaluation && (
+        <div style={{ marginTop: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div style={{ ...T.cardInner, textAlign: 'center', background: AMBER.bg, borderColor: AMBER.border }}>
+            <div style={{ fontSize: '34px', fontWeight: 800, color: AMBER.text }}>{evaluation.score}/100</div>
+            <div style={{ color: AMBER.text, marginTop: '4px' }}>{evaluation.overallAr}</div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '8px' }}>
+            {[
+              ['registerFit', 'مطابقة المستوى'],
+              ['grammar', 'القواعد'],
+              ['naturalness', 'الانسيابية'],
+            ].map(([k, label]) => (
+              <div key={k} style={{ ...T.cardInner, textAlign: 'center' }}>
+                <div style={{ ...T.muted, fontSize: '12px' }}>{label}</div>
+                <div style={{ fontSize: '22px', fontWeight: 700, color: AMBER.text }}>{evaluation[k] ?? '-'}</div>
+              </div>
+            ))}
+            <div style={{ ...T.cardInner, textAlign: 'center' }}>
+              <div style={{ ...T.muted, fontSize: '12px' }}>المعنى محفوظ</div>
+              <div style={{ fontSize: '22px', fontWeight: 700, color: evaluation.meaningPreserved ? 'var(--color-text-success, #157A42)' : 'var(--color-text-danger, #B91C1C)' }}>
+                {evaluation.meaningPreserved ? '✓' : '✗'}
+              </div>
+            </div>
+          </div>
+
+          {evaluation.corrections && evaluation.corrections.length > 0 && (
+            <div style={T.cardInner}>
+              <div style={T.label}>تصحيحات</div>
+              {evaluation.corrections.map((c, i) => (
+                <div key={i} style={{ marginBottom: '10px', paddingBottom: '10px', borderBottom: '1px dashed var(--color-border-primary, #e5e5e5)' }}>
+                  <div dir="ltr" style={{ color: 'var(--color-text-danger, #B91C1C)', textDecoration: 'line-through', fontFamily: 'Georgia, serif' }}>{c.original}</div>
+                  <div dir="ltr" style={{ color: 'var(--color-text-success, #157A42)', fontFamily: 'Georgia, serif' }}>{c.corrected}</div>
+                  <div style={{ ...T.muted, marginTop: '4px' }}>{c.noteAr}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {evaluation.registerMissesAr && evaluation.registerMissesAr.length > 0 && (
+            <div style={{ ...T.cardInner, background: 'var(--color-background-info, #E0F2FF)', borderColor: 'var(--color-text-info, #0369A1)' }}>
+              <div style={{ ...T.label, color: 'var(--color-text-info, #0369A1)' }}>عناصر لا تناسب المستوى</div>
+              <ul style={{ color: 'var(--color-text-info, #0369A1)', margin: 0, paddingInlineStart: '20px' }}>
+                {evaluation.registerMissesAr.map((m, i) => <li key={i} style={{ marginBottom: '4px' }}>{m}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {evaluation.modelVersion && (
+            <div style={T.cardInner}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                <div style={T.label}>نسخة نموذجية</div>
+                <button onClick={() => setShowModel(s => !s)} style={btn('ghost', 'sm')}>
+                  {showModel ? <EyeOff size={12} /> : <Eye size={12} />}
+                  {showModel ? ' أخفِ' : ' اكشف'}
+                </button>
+              </div>
+              {showModel && (
+                <>
+                  <div dir="ltr" style={{ ...T.english, fontStyle: 'italic', lineHeight: 1.7 }}>{evaluation.modelVersion}</div>
+                  <button onClick={() => speak(evaluation.modelVersion)} style={{ ...btn('amber', 'sm'), marginTop: '6px' }}>
+                    <Volume2 size={12} /> استمع
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
+          {evaluation.encouragementAr && (
+            <div style={{ ...T.cardInner, background: 'var(--color-background-success, #E7F6EA)', borderColor: 'var(--color-text-success, #157A42)' }}>
+              <div style={{ color: 'var(--color-text-success, #157A42)' }}>{evaluation.encouragementAr}</div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -2894,6 +3177,102 @@ Return ONLY JSON:
 ============================================================ */
 const TRANSLATIONS_KEY = 'linguaflow_translations_v1';
 
+const TRANSLATE_LEVELS = [
+  { id: 'informal',  ar: 'عامية / دارجة',     en: 'informal' },
+  { id: 'formal',    ar: 'رسمية',             en: 'formal' },
+  { id: 'academic',  ar: 'أكاديمية',          en: 'academic' },
+  { id: 'political', ar: 'سياسية / إخبارية',  en: 'political (news/diplomatic)' },
+];
+const TRANSLATE_LEVEL_MAP = Object.fromEntries(TRANSLATE_LEVELS.map(l => [l.id, l]));
+
+function TermCard({ item, kind }) {
+  const [open, setOpen] = useState(false);
+  const alts = Array.isArray(item.registerAlternatives) ? item.registerAlternatives : [];
+  const headerEn = kind === 'idiom' ? item.phrase : item.en;
+  return (
+    <div style={T.cardInner}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+        <div dir="ltr" style={{ ...T.english, fontSize: kind === 'idiom' ? '15px' : '16px', fontWeight: 700 }}>
+          {headerEn}
+        </div>
+        <button onClick={() => speak(headerEn)} style={btn('ghost', 'sm')}>
+          <Volume2 size={12} />
+        </button>
+      </div>
+
+      {kind === 'idiom' ? (
+        <>
+          {item.literalAr && (
+            <div style={{ ...T.muted, marginTop: '4px', fontStyle: 'italic' }}>
+              حرفياً: {item.literalAr}
+            </div>
+          )}
+          {item.meaningAr && (
+            <div style={{ marginTop: '4px' }}>
+              <span style={pill('amber')}>المعنى الفعلي</span>{' '}
+              <span>{item.meaningAr}</span>
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          {item.ar && (
+            <div style={{ marginTop: '4px' }}>
+              <span style={pill('amber')}>{item.ar}</span>
+            </div>
+          )}
+          {item.explanationAr && (
+            <div style={{ ...T.muted, marginTop: '6px' }}>{item.explanationAr}</div>
+          )}
+        </>
+      )}
+
+      {alts.length > 0 && (
+        <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px dashed var(--color-border-primary, #e5e5e5)' }}>
+          <button onClick={() => setOpen(o => !o)} style={{
+            ...btn('ghost', 'sm'),
+            padding: '2px 4px',
+            color: AMBER.text,
+          }}>
+            {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+            بدائل بمستويات مختلفة ({alts.length})
+          </button>
+          {open && (
+            <div style={{ marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {alts.map((a, i) => {
+                const lvl = TRANSLATE_LEVEL_MAP[a.level] || { ar: a.level || 'بديل', en: a.level || '' };
+                return (
+                  <div key={i} style={{
+                    background: 'var(--color-background-primary)',
+                    border: '1px solid var(--color-border-primary, #e5e5e5)',
+                    borderRadius: '8px',
+                    padding: '8px 10px',
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '4px' }}>
+                      <span style={pill('amber')}>{lvl.ar}</span>
+                      {a.en && (
+                        <button onClick={() => speak(a.en)} style={{ ...btn('ghost', 'sm'), padding: '2px 4px' }}>
+                          <Volume2 size={11} />
+                        </button>
+                      )}
+                    </div>
+                    {a.en && (
+                      <div dir="ltr" style={{ ...T.english, fontSize: '14px' }}>{a.en}</div>
+                    )}
+                    {a.ar && (
+                      <div style={{ ...T.muted, fontSize: '12px', marginTop: '2px' }}>{a.ar}</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TranslateTab({ words, saveWords }) {
   const [inputMode, setInputMode] = useState('paste');
   const [input, setInput] = useState('');
@@ -2965,13 +3344,44 @@ Return ONLY JSON (no fences, no commentary):
 {
   "translation": "الترجمة العربية الكاملة، تراعي السياق التخصصي والاصطلاحات",
   "summary": "ملخص جملة-جملتان بالعربية",
-  "keyTerms": [{"en":"term","ar":"ترجمة","explanationAr":"شرح في هذا السياق"}],
-  "idioms": [{"phrase":"...","literalAr":"حرفياً","meaningAr":"المعنى الفعلي"}],
-  "culturalNotes": "ملاحظات ثقافية/سياقية أو فارغ",
+  "keyTerms": [{
+    "en": "term as it appears",
+    "ar": "ترجمة في هذا السياق",
+    "explanationAr": "شرح موجز",
+    "registerAlternatives": [
+      {"level":"informal","en":"colloquial English alternative","ar":"الترجمة العامية"},
+      {"level":"formal","en":"formal English alternative","ar":"الترجمة الرسمية"},
+      {"level":"academic","en":"academic English alternative","ar":"الترجمة الأكاديمية"},
+      {"level":"political","en":"news/diplomatic English alternative","ar":"الترجمة السياسية"}
+    ]
+  }],
+  "idioms": [{
+    "phrase": "the English idiom or colloquial phrase",
+    "literalAr": "ترجمة حرفية",
+    "meaningAr": "المعنى الفعلي",
+    "registerAlternatives": [
+      {"level":"informal","en":"...","ar":"..."},
+      {"level":"formal","en":"...","ar":"..."},
+      {"level":"academic","en":"...","ar":"..."},
+      {"level":"political","en":"...","ar":"..."}
+    ]
+  }],
+  "culturalNotes": "ملاحظات ثقافية/سياقية أو نص فارغ",
+  "rephrasings": [
+    {"level":"informal","en":"the WHOLE source text rewritten in informal/colloquial English","ar":"الترجمة العربية لهذه الصياغة","noteAr":"ما الذي تغيّر في هذا المستوى"},
+    {"level":"formal","en":"...","ar":"...","noteAr":"..."},
+    {"level":"academic","en":"...","ar":"...","noteAr":"..."},
+    {"level":"political","en":"...","ar":"...","noteAr":"..."}
+  ],
   "suggestedWords": [
     {"word":"...","definitionEn":"...","definitionAr":"...","exampleEn":"...","exampleAr":"...","domain":"${d.id}"}
   ]
 }
+
+Rules:
+- registerAlternatives should be relevant ONLY when the term/idiom has meaningfully different forms across registers; otherwise return at most 2 levels.
+- For very short source text (< 8 words), still produce all 4 rephrasings — they may be brief.
+- Keep collocations/idioms natural; avoid translationese.
 
 Source:
 """
@@ -3153,16 +3563,31 @@ ${input.trim()}
 
       {result && (
         <>
-          <div style={T.card}>
+          {/* Quick navigator */}
+          <div style={{
+            ...T.card, padding: '10px 12px',
+            display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center',
+          }}>
+            <span style={{ ...T.muted, marginInlineEnd: '4px' }}>الأقسام:</span>
+            {result.summary && <a href="#tr-summary" style={pill('info')}>الملخص</a>}
+            {result.keyTerms?.length > 0 && <a href="#tr-terms" style={pill('amber')}>المصطلحات ({result.keyTerms.length})</a>}
+            {result.idioms?.length > 0 && <a href="#tr-idioms" style={pill('amber')}>عبارات ({result.idioms.length})</a>}
+            {result.rephrasings?.length > 0 && <a href="#tr-rephr" style={pill('amber')}>إعادة صياغة ({result.rephrasings.length})</a>}
+            {result.culturalNotes?.trim() && <a href="#tr-notes" style={pill('success')}>ملاحظات</a>}
+            {result.suggestedWords?.length > 0 && <a href="#tr-words" style={pill('info')}>كلمات للحفظ ({result.suggestedWords.length})</a>}
+          </div>
+
+          {/* Translation + Summary */}
+          <div style={T.card} id="tr-summary">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', flexWrap: 'wrap', gap: '6px' }}>
               <h2 style={T.h2}>الترجمة</h2>
-              <div style={{ display: 'flex', gap: '6px' }}>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                 <button onClick={() => setShowOriginal(s => !s)} style={btn('secondary', 'sm')}>
                   {showOriginal ? <EyeOff size={14} /> : <Eye size={14} />}
                   {showOriginal ? ' إخفاء الأصل' : ' إظهار الأصل'}
                 </button>
                 <button onClick={() => speak(input)} style={btn('amber', 'sm')}>
-                  <Volume2 size={14} /> استمع
+                  <Volume2 size={14} /> استمع للأصل
                 </button>
                 <button onClick={stopSpeaking} style={btn('ghost', 'sm')}>
                   <Square size={14} />
@@ -3190,61 +3615,76 @@ ${input.trim()}
             )}
           </div>
 
+          {/* Key terms */}
           {result.keyTerms && result.keyTerms.length > 0 && (
-            <div style={T.card}>
+            <div style={T.card} id="tr-terms">
               <h2 style={T.h2}>المصطلحات الرئيسية</h2>
-              <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div style={{ ...T.muted, marginTop: '4px', marginBottom: '10px', fontSize: '13px' }}>
+                لكل مصطلح: ترجمة سياقية + بدائل بمستويات لغوية مختلفة (إن وُجدت).
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 {result.keyTerms.map((t, i) => (
-                  <div key={i} style={T.cardInner}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                      <div dir="ltr" style={{ ...T.english, fontSize: '16px', fontWeight: 700 }}>{t.en}</div>
-                      <button onClick={() => speak(t.en)} style={btn('ghost', 'sm')}>
-                        <Volume2 size={12} />
-                      </button>
-                    </div>
-                    <div style={{ marginTop: '4px' }}>
-                      <span style={pill('amber')}>{t.ar}</span>
-                    </div>
-                    {t.explanationAr && (
-                      <div style={{ ...T.muted, marginTop: '6px' }}>{t.explanationAr}</div>
-                    )}
-                  </div>
+                  <TermCard key={i} item={t} kind="term" />
                 ))}
               </div>
             </div>
           )}
 
+          {/* Idioms */}
           {result.idioms && result.idioms.length > 0 && (
-            <div style={T.card}>
-              <h2 style={T.h2}>عبارات اصطلاحية</h2>
-              <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={T.card} id="tr-idioms">
+              <h2 style={T.h2}>عبارات اصطلاحية / عامية</h2>
+              <div style={{ ...T.muted, marginTop: '4px', marginBottom: '10px', fontSize: '13px' }}>
+                المعنى الحرفي يختلف عن المعنى الفعلي — لا تترجمها كلمة بكلمة.
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 {result.idioms.map((id, i) => (
-                  <div key={i} style={T.cardInner}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                      <div dir="ltr" style={{ ...T.english, fontSize: '15px', fontWeight: 600 }}>{id.phrase}</div>
-                      <button onClick={() => speak(id.phrase)} style={btn('ghost', 'sm')}>
-                        <Volume2 size={12} />
-                      </button>
-                    </div>
-                    {id.literalAr && (
-                      <div style={{ ...T.muted, marginTop: '4px', fontStyle: 'italic' }}>
-                        حرفياً: {id.literalAr}
-                      </div>
-                    )}
-                    {id.meaningAr && (
-                      <div style={{ marginTop: '4px' }}>
-                        <span style={pill('amber')}>المعنى الفعلي</span>{' '}
-                        <span>{id.meaningAr}</span>
-                      </div>
-                    )}
-                  </div>
+                  <TermCard key={i} item={id} kind="idiom" />
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* Rephrasings — full text in 4 registers */}
+          {result.rephrasings && result.rephrasings.length > 0 && (
+            <div style={T.card} id="tr-rephr">
+              <h2 style={T.h2}>إعادة صياغة النص بمستويات مختلفة</h2>
+              <div style={{ ...T.muted, marginTop: '4px', marginBottom: '10px', fontSize: '13px' }}>
+                نفس النص الإنجليزي مُعاد صياغته في 4 مستويات — لاحظ كيف تتغيّر المفردات وبنية الجمل.
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {result.rephrasings.map((r, i) => {
+                  const lvl = TRANSLATE_LEVEL_MAP[r.level] || { ar: r.level, en: r.level };
+                  return (
+                    <div key={i} style={T.cardInner}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                        <span style={pill('amber')}>{lvl.ar}</span>
+                        <button onClick={() => speak(r.en)} style={btn('amber', 'sm')}>
+                          <Volume2 size={12} /> استمع
+                        </button>
+                      </div>
+                      {r.en && (
+                        <div dir="ltr" style={{ ...T.english, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+                          {r.en}
+                        </div>
+                      )}
+                      {r.ar && (
+                        <div style={{ ...T.muted, fontSize: '13px', marginTop: '6px' }}>{r.ar}</div>
+                      )}
+                      {r.noteAr && (
+                        <div style={{ marginTop: '6px', color: AMBER.text, background: AMBER.bg, padding: '6px 8px', borderRadius: '6px', fontSize: '12px' }}>
+                          💡 {r.noteAr}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
 
           {result.culturalNotes && result.culturalNotes.trim() && (
-            <div style={T.card}>
+            <div style={T.card} id="tr-notes">
               <h2 style={T.h2}>ملاحظات سياقية / ثقافية</h2>
               <div style={{ ...T.cardInner, marginTop: '10px', background: 'var(--color-background-success, #E7F6EA)', borderColor: 'var(--color-text-success, #157A42)' }}>
                 <div style={{ color: 'var(--color-text-success, #157A42)' }}>{result.culturalNotes}</div>
@@ -3253,7 +3693,7 @@ ${input.trim()}
           )}
 
           {result.suggestedWords && result.suggestedWords.length > 0 && (
-            <div style={T.card}>
+            <div style={T.card} id="tr-words">
               <h2 style={T.h2}>كلمات مقترحة للحفظ</h2>
               <div style={{ ...T.muted, marginTop: '4px', marginBottom: '10px' }}>
                 مصطلحات استخرجها الذكاء من النص — أضفها لمكتبتك لتدخل في دورة المراجعة.
