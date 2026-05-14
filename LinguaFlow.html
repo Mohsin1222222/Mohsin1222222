@@ -79,7 +79,8 @@ import {
   Square, MicOff, Eye, EyeOff, ArrowRight, ArrowLeft,
   GraduationCap, Briefcase, Scale, Stethoscope, Newspaper,
   Coins, Shield, Cpu, HeartHandshake, Settings, Key,
-  Languages, ClipboardPaste, History, ChevronDown, ChevronUp
+  Languages, ClipboardPaste, History, ChevronDown, ChevronUp,
+  NotebookPen, CalendarDays
 } from 'lucide-react';
 
 /* ============================================================
@@ -2975,6 +2976,421 @@ ${input.trim()}
   );
 }
 
+/* ============================================================
+   Journal Tab — daily writing with AI evaluation
+============================================================ */
+function JournalTab() {
+  const [entries, setEntries] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [prompt, setPrompt] = useState(null);
+  const [text, setText] = useState('');
+  const [domain, setDomain] = useState('daily');
+  const [loadingPrompt, setLoadingPrompt] = useState(false);
+  const [loadingEval, setLoadingEval] = useState(false);
+  const [evaluation, setEvaluation] = useState(null);
+  const [err, setErr] = useState('');
+  const [savedId, setSavedId] = useState(null);
+  const [viewing, setViewing] = useState(null);
+  const [filterMonth, setFilterMonth] = useState('');
+
+  useEffect(() => {
+    (async () => {
+      const j = (await storageGet(JOURNAL_KEY)) || [];
+      setEntries(j);
+      setLoaded(true);
+    })();
+  }, []);
+
+  const persist = async (next) => {
+    setEntries(next);
+    await storageSet(JOURNAL_KEY, next);
+  };
+
+  const todays = useMemo(() => entries.filter(e => e.date === todayStr()), [entries]);
+
+  const streak = useMemo(() => {
+    if (entries.length === 0) return 0;
+    const dates = new Set(entries.map(e => e.date));
+    let count = 0;
+    let cursor = new Date();
+    for (let i = 0; i < 365; i++) {
+      const d = cursor.toISOString().slice(0, 10);
+      if (dates.has(d)) count++;
+      else if (i > 0) break;
+      cursor = new Date(cursor.getTime() - 86400000);
+    }
+    return count;
+  }, [entries]);
+
+  const totalWords = useMemo(
+    () => entries.reduce((s, e) => s + (e.wordCount || 0), 0),
+    [entries]
+  );
+
+  const months = useMemo(() => {
+    const s = new Set(entries.map(e => e.date.slice(0, 7)));
+    return Array.from(s).sort().reverse();
+  }, [entries]);
+
+  const visibleEntries = useMemo(() => {
+    const sorted = entries.slice().sort((a, b) => b.id - a.id);
+    if (!filterMonth) return sorted;
+    return sorted.filter(e => e.date.startsWith(filterMonth));
+  }, [entries, filterMonth]);
+
+  const wordCount = useMemo(() => {
+    const t = text.trim();
+    if (!t) return 0;
+    return t.split(/\s+/).length;
+  }, [text]);
+
+  const newPrompt = async () => {
+    setLoadingPrompt(true); setErr(''); setEvaluation(null); setSavedId(null);
+    try {
+      const d = DOMAIN_MAP[domain] || DOMAIN_MAP.daily;
+      const p =
+`Suggest ONE journaling prompt for an Arabic-speaking B2+ English learner.
+Topic flavor: ${d.en}. Keep it personal, reflective, and concrete enough
+to write 80-150 words about in English.
+
+Return ONLY JSON:
+{
+  "promptEn": "the journaling prompt in English",
+  "promptAr": "نفس السؤال بالعربية",
+  "anglesAr": ["زاوية اقتراحية بالعربية 1","2","3"],
+  "usefulPhrases": ["B2 English phrase or collocation that fits","..."]
+}`;
+      const text = await callAI(p, null, 1000);
+      const obj = extractJSON(text);
+      if (!obj || !obj.promptEn) throw new Error('parse');
+      setPrompt(obj);
+    } catch (e) {
+      if (e.code === 'NO_API_KEY') setErr('أدخل مفتاح API من زر الإعدادات');
+      else if (e.code === 'INVALID_KEY') setErr('مفتاح API غير صالح');
+      else setErr('تعذّر توليد اقتراح — حاول مجدداً');
+    } finally { setLoadingPrompt(false); }
+  };
+
+  const saveEntry = async () => {
+    if (!text.trim()) return;
+    const entry = {
+      id: Date.now(),
+      date: todayStr(),
+      domain,
+      promptEn: prompt?.promptEn || '',
+      promptAr: prompt?.promptAr || '',
+      text: text.trim(),
+      wordCount,
+      createdAt: new Date().toISOString(),
+      evaluation: evaluation || null,
+    };
+    await persist([entry, ...entries]);
+    setSavedId(entry.id);
+  };
+
+  const evaluate = async () => {
+    if (!text.trim()) return;
+    setLoadingEval(true); setErr(''); setEvaluation(null);
+    try {
+      const d = DOMAIN_MAP[domain] || DOMAIN_MAP.daily;
+      const p =
+`You are a supportive English coach reading a B2+ Arabic learner's daily journal.
+Domain flavor: ${d.en}.
+${prompt?.promptEn ? `They were responding to: "${prompt.promptEn}"` : ''}
+
+Their writing:
+"""
+${text.trim()}
+"""
+
+Be encouraging. Pick the 2-3 most impactful corrections — do not list every minor thing.
+Suggest ONE specific vocabulary upgrade and ONE grammar focus for next time.
+
+Return ONLY JSON:
+{
+  "score": 0-100,
+  "summaryAr": "تقييم شامل بالعربية (مختصر)",
+  "strengthsAr": ["نقطة قوة 1","نقطة قوة 2"],
+  "corrections": [
+    {"original":"original English","corrected":"corrected English","noteAr":"شرح عربي"}
+  ],
+  "vocabUpgradeAr": "كلمة أو عبارة B2 أفضل للمرة القادمة + شرح",
+  "grammarFocusAr": "نقطة قواعد للتركيز عليها في الجلسة التالية",
+  "polishedVersion": "a polished English version preserving the writer's voice",
+  "encouragementAr": "رسالة تشجيعية قصيرة بالعربية"
+}`;
+      const text2 = await callAI(p, null, 2000);
+      const obj = extractJSON(text2);
+      if (!obj) throw new Error('parse');
+      setEvaluation(obj);
+    } catch (e) {
+      if (e.code === 'NO_API_KEY') setErr('أدخل مفتاح API من زر الإعدادات');
+      else if (e.code === 'INVALID_KEY') setErr('مفتاح API غير صالح');
+      else setErr('تعذّر التقييم — حاول مجدداً');
+    } finally { setLoadingEval(false); }
+  };
+
+  const deleteEntry = async (id) => {
+    await persist(entries.filter(e => e.id !== id));
+    if (viewing?.id === id) setViewing(null);
+    if (savedId === id) setSavedId(null);
+  };
+
+  const startBlank = () => {
+    setText(''); setPrompt(null); setEvaluation(null); setSavedId(null); setErr('');
+  };
+
+  if (!loaded) {
+    return <div style={{ ...T.muted, textAlign: 'center', padding: '20px' }}>جاري التحميل...</div>;
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <div style={T.card}>
+        <h2 style={T.h2}>اليوميات</h2>
+        <div style={{ ...T.muted, marginTop: '4px', marginBottom: '12px' }}>
+          كتابة يومية حرّة بالإنجليزية — أسرع طريقة لبناء طلاقة الكتابة. 5 دقائق يومياً تصنع فرقاً.
+        </div>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <span style={pill('amber')}><Flame size={12} /> {streak} يوم متتالٍ</span>
+          <span style={pill('info')}><NotebookPen size={12} /> {entries.length} مدخل</span>
+          <span style={pill('success')}><FileText size={12} /> {totalWords} كلمة</span>
+          <span style={pill(todays.length > 0 ? 'success' : 'neutral')}>
+            <Calendar size={12} /> اليوم: {todays.length} {todays.length > 0 ? '✓' : ''}
+          </span>
+        </div>
+      </div>
+
+      <div style={T.card}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+          <h2 style={T.h2}>مدخل جديد · {todayStr()}</h2>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button onClick={newPrompt} disabled={loadingPrompt} style={btn('amber', 'sm')}>
+              {loadingPrompt ? <Spinner size={14} /> : <Sparkles size={14} />} اقترح موضوعاً
+            </button>
+            <button onClick={startBlank} style={btn('ghost', 'sm')}>
+              <FileText size={14} /> صفحة فارغة
+            </button>
+          </div>
+        </div>
+
+        <div style={{ marginTop: '10px' }}>
+          <div style={T.label}>المزاج / السياق</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            {DOMAINS.map(d => {
+              const I = d.icon;
+              return (
+                <button key={d.id} onClick={() => setDomain(d.id)} style={btn(domain === d.id ? 'amber' : 'secondary', 'sm')}>
+                  <I size={12} /> {d.ar}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {prompt && (
+          <div style={{ ...T.cardInner, background: AMBER.bg, borderColor: AMBER.border, marginTop: '12px' }}>
+            <div dir="ltr" style={{ ...T.english, fontSize: '16px', fontWeight: 700 }}>{prompt.promptEn}</div>
+            <div style={{ color: AMBER.text, fontSize: '14px', marginTop: '4px' }}>{prompt.promptAr}</div>
+            {prompt.anglesAr && prompt.anglesAr.length > 0 && (
+              <div style={{ marginTop: '8px' }}>
+                <div style={{ ...T.label, color: AMBER.text }}>زوايا للكتابة</div>
+                <ul style={{ color: AMBER.text, margin: 0, paddingInlineStart: '20px', fontSize: '13px' }}>
+                  {prompt.anglesAr.map((a, i) => <li key={i} style={{ marginBottom: '2px' }}>{a}</li>)}
+                </ul>
+              </div>
+            )}
+            {prompt.usefulPhrases && prompt.usefulPhrases.length > 0 && (
+              <div style={{ marginTop: '8px' }}>
+                <div style={{ ...T.label, color: AMBER.text }}>عبارات مفيدة</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                  {prompt.usefulPhrases.map((p, i) => (
+                    <span key={i} dir="ltr" style={{ ...pill('amber'), ...T.english }}>{p}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div style={{ marginTop: '12px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+            <label style={T.label}>اكتب بالإنجليزية</label>
+            <span style={T.muted}>{wordCount} كلمة</span>
+          </div>
+          <textarea
+            dir="ltr"
+            style={{ ...T.textarea, ...T.english, minHeight: '200px' }}
+            value={text}
+            onChange={e => setText(e.target.value)}
+            placeholder="Today I..."
+          />
+        </div>
+
+        <div style={{ marginTop: '10px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button onClick={saveEntry} disabled={!text.trim()} style={btn('success', 'md')}>
+            <BookmarkCheck size={14} /> احفظ المدخل
+          </button>
+          <button onClick={evaluate} disabled={!text.trim() || loadingEval} style={btn('primary', 'md')}>
+            {loadingEval ? <Spinner size={14} /> : <Send size={14} />} قيّم
+          </button>
+          {savedId && <span style={pill('success')}><Check size={12} /> محفوظ</span>}
+        </div>
+
+        {err && <div style={{ color: 'var(--color-text-danger, #B91C1C)', marginTop: '10px', fontSize: '13px' }}>{err}</div>}
+      </div>
+
+      {evaluation && (
+        <div style={T.card}>
+          <h2 style={T.h2}>التقييم</h2>
+          <div style={{ ...T.cardInner, textAlign: 'center', background: AMBER.bg, borderColor: AMBER.border, marginTop: '10px' }}>
+            <div style={{ fontSize: '34px', fontWeight: 800, color: AMBER.text }}>{evaluation.score}/100</div>
+            <div style={{ color: AMBER.text, marginTop: '4px' }}>{evaluation.summaryAr}</div>
+          </div>
+
+          {evaluation.strengthsAr && evaluation.strengthsAr.length > 0 && (
+            <div style={{ ...T.cardInner, marginTop: '10px', background: 'var(--color-background-success, #E7F6EA)', borderColor: 'var(--color-text-success, #157A42)' }}>
+              <div style={{ ...T.label, color: 'var(--color-text-success, #157A42)' }}>نقاط قوة</div>
+              <ul style={{ color: 'var(--color-text-success, #157A42)', margin: 0, paddingInlineStart: '20px' }}>
+                {evaluation.strengthsAr.map((s, i) => <li key={i} style={{ marginBottom: '2px' }}>{s}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {evaluation.corrections && evaluation.corrections.length > 0 && (
+            <div style={{ ...T.cardInner, marginTop: '10px' }}>
+              <div style={T.label}>تصحيحات مختارة</div>
+              {evaluation.corrections.map((c, i) => (
+                <div key={i} style={{ marginBottom: '10px', paddingBottom: '10px', borderBottom: '1px dashed var(--color-border-primary, #e5e5e5)' }}>
+                  <div dir="ltr" style={{ color: 'var(--color-text-danger, #B91C1C)', textDecoration: 'line-through', fontFamily: 'Georgia, serif' }}>{c.original}</div>
+                  <div dir="ltr" style={{ color: 'var(--color-text-success, #157A42)', fontFamily: 'Georgia, serif' }}>{c.corrected}</div>
+                  <div style={{ ...T.muted, marginTop: '4px' }}>{c.noteAr}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {(evaluation.vocabUpgradeAr || evaluation.grammarFocusAr) && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '8px', marginTop: '10px' }}>
+              {evaluation.vocabUpgradeAr && (
+                <div style={{ ...T.cardInner, background: 'var(--color-background-info, #E0F2FF)', borderColor: 'var(--color-text-info, #0369A1)' }}>
+                  <div style={{ ...T.label, color: 'var(--color-text-info, #0369A1)' }}>📚 ترقية مفردات</div>
+                  <div style={{ color: 'var(--color-text-info, #0369A1)', fontSize: '13px' }}>{evaluation.vocabUpgradeAr}</div>
+                </div>
+              )}
+              {evaluation.grammarFocusAr && (
+                <div style={{ ...T.cardInner, background: AMBER.bg, borderColor: AMBER.border }}>
+                  <div style={{ ...T.label, color: AMBER.text }}>🎯 نقطة قواعد للجلسة القادمة</div>
+                  <div style={{ color: AMBER.text, fontSize: '13px' }}>{evaluation.grammarFocusAr}</div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {evaluation.polishedVersion && (
+            <div style={{ ...T.cardInner, marginTop: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+                <div style={T.label}>نسخة مصقولة (تحافظ على صوتك)</div>
+                <button onClick={() => speak(evaluation.polishedVersion)} style={btn('amber', 'sm')}>
+                  <Volume2 size={12} /> استمع
+                </button>
+              </div>
+              <div dir="ltr" style={{ ...T.english, fontStyle: 'italic', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{evaluation.polishedVersion}</div>
+            </div>
+          )}
+
+          {evaluation.encouragementAr && (
+            <div style={{ ...T.cardInner, marginTop: '10px', background: 'var(--color-background-success, #E7F6EA)', borderColor: 'var(--color-text-success, #157A42)' }}>
+              <div style={{ color: 'var(--color-text-success, #157A42)' }}>{evaluation.encouragementAr}</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={T.card}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+          <h2 style={T.h2}><CalendarDays size={18} style={{ display: 'inline', verticalAlign: '-3px' }} /> الأرشيف</h2>
+          {months.length > 0 && (
+            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+              <button onClick={() => setFilterMonth('')} style={btn(!filterMonth ? 'amber' : 'ghost', 'sm')}>
+                الكل
+              </button>
+              {months.slice(0, 6).map(m => (
+                <button key={m} onClick={() => setFilterMonth(filterMonth === m ? '' : m)} style={btn(filterMonth === m ? 'amber' : 'ghost', 'sm')}>
+                  {m}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {visibleEntries.length === 0 ? (
+          <div style={{ ...T.muted, textAlign: 'center', padding: '20px' }}>
+            لا توجد مدخلات بعد. ابدأ بكتابة سطرين اليوم.
+          </div>
+        ) : (
+          <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {visibleEntries.map(e => (
+              <div key={e.id} style={T.cardInner}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={pill('amber')}>{e.date}</span>
+                    {DOMAIN_MAP[e.domain] && <span style={pill('neutral')}>{DOMAIN_MAP[e.domain].ar}</span>}
+                    <span style={T.muted}>{e.wordCount} كلمة</span>
+                    {e.evaluation && <span style={pill('success')}><Award size={11} /> {e.evaluation.score}/100</span>}
+                  </div>
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                    <button onClick={() => setViewing(viewing?.id === e.id ? null : e)} style={btn('secondary', 'sm')}>
+                      {viewing?.id === e.id ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                      {viewing?.id === e.id ? ' أخفِ' : ' افتح'}
+                    </button>
+                    <button onClick={() => deleteEntry(e.id)} style={btn('ghost', 'sm')}>
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                </div>
+                {viewing?.id !== e.id && (
+                  <div dir="ltr" style={{ ...T.english, fontSize: '13px', maxHeight: '50px', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.5 }}>
+                    {e.text.slice(0, 160)}{e.text.length > 160 ? '...' : ''}
+                  </div>
+                )}
+                {viewing?.id === e.id && (
+                  <div style={{ marginTop: '6px' }}>
+                    {e.promptEn && (
+                      <div style={{ ...T.cardInner, background: AMBER.bg, borderColor: AMBER.border, marginBottom: '8px' }}>
+                        <div dir="ltr" style={{ ...T.english, fontSize: '13px', fontWeight: 600 }}>{e.promptEn}</div>
+                        {e.promptAr && <div style={{ color: AMBER.text, fontSize: '12px', marginTop: '2px' }}>{e.promptAr}</div>}
+                      </div>
+                    )}
+                    <div dir="ltr" style={{ ...T.english, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{e.text}</div>
+                    <button onClick={() => speak(e.text)} style={{ ...btn('amber', 'sm'), marginTop: '6px' }}>
+                      <Volume2 size={12} /> استمع
+                    </button>
+                    {e.evaluation && (
+                      <div style={{ ...T.cardInner, marginTop: '8px' }}>
+                        <div style={{ ...T.label }}>تقييم محفوظ</div>
+                        <div>{e.evaluation.summaryAr}</div>
+                        {e.evaluation.polishedVersion && (
+                          <div style={{ marginTop: '8px' }}>
+                            <div style={T.label}>نسخة مصقولة</div>
+                            <div dir="ltr" style={{ ...T.english, fontStyle: 'italic', fontSize: '13px', lineHeight: 1.6 }}>
+                              {e.evaluation.polishedVersion}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function LinguaFlow() {
   const [tab, setTab] = useState('add');
   const [words, setWords] = useState([]);
@@ -3029,6 +3445,7 @@ function LinguaFlow() {
     { id: 'review',    label: 'مراجعة',   icon: Brain },
     { id: 'translate', label: 'الترجمة',  icon: Languages },
     { id: 'writing',   label: 'الكتابة',  icon: PenLine },
+    { id: 'journal',   label: 'اليوميات', icon: NotebookPen },
     { id: 'speaking',  label: 'التحدث',   icon: Mic },
     { id: 'listening', label: 'الاستماع', icon: Headphones },
   ];
@@ -3071,6 +3488,7 @@ function LinguaFlow() {
           {tab === 'review'    && <ReviewTab  words={words} saveWords={saveWords} stats={stats} saveStats={saveStats} />}
           {tab === 'translate' && <TranslateTab words={words} saveWords={saveWords} />}
           {tab === 'writing'   && <WritingTab words={words} />}
+          {tab === 'journal'   && <JournalTab />}
           {tab === 'speaking'  && <SpeakingTab words={words} />}
           {tab === 'listening' && <ListeningTab />}
         </div>
