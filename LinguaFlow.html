@@ -339,6 +339,7 @@ const _tts = {
   queue: [],
   speaking: false,
   listeners: new Set(),
+  defaultRate: 0.95,
 };
 
 function _ttsLoadPref() {
@@ -385,6 +386,15 @@ function _ttsRefresh() {
   _tts.voices = window.speechSynthesis.getVoices() || [];
   _tts.ready = _tts.voices.length > 0;
   _tts.selected = _ttsPickBest();
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (raw) {
+      const s = JSON.parse(raw);
+      if (typeof s?.ttsRate === 'number' && s.ttsRate >= 0.5 && s.ttsRate <= 1.5) {
+        _tts.defaultRate = s.ttsRate;
+      }
+    }
+  } catch {}
   _tts.listeners.forEach(fn => { try { fn(); } catch {} });
 }
 
@@ -404,12 +414,21 @@ if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
 
 function getTtsVoices() { return _tts.voices.slice(); }
 function getTtsSelected() { return _tts.selected; }
+function getTtsRate() { return _tts.defaultRate; }
 function onTtsChange(fn) { _tts.listeners.add(fn); return () => _tts.listeners.delete(fn); }
 function setTtsVoiceURI(uri) {
   const v = _tts.voices.find(x => x.voiceURI === uri);
   if (v) _tts.selected = v;
   else _tts.selected = _ttsPickBest();
   _tts.listeners.forEach(fn => { try { fn(); } catch {} });
+}
+function setTtsRateDefault(r) {
+  const n = Number(r);
+  if (Number.isFinite(n) && n >= 0.5 && n <= 1.5) _tts.defaultRate = n;
+}
+function isNaturalVoice(v) {
+  if (!v) return false;
+  return /Natural|Online|Google|Microsoft (Aria|Jenny|Guy|Ana|Eric|Roger|Steffan)/i.test(v.name || '');
 }
 
 function _ttsSplit(text, maxLen = 180) {
@@ -458,16 +477,17 @@ function _ttsSpeakNext(lang, rate) {
   catch { _ttsSpeakNext(lang, rate); }
 }
 
-function speak(text, lang = 'en-US', rate = 0.95) {
+function speak(text, lang = 'en-US', rate) {
   try {
     if (!('speechSynthesis' in window) || !text) return;
+    const effRate = (typeof rate === 'number' && rate > 0) ? rate : _tts.defaultRate;
     try { window.speechSynthesis.cancel(); } catch {}
     _tts.queue = _ttsSplit(text);
     _tts.speaking = true;
     // Small delay avoids Chrome's cancel→speak race condition.
     setTimeout(() => {
       if (!_tts.speaking) return;
-      _ttsSpeakNext(lang, rate);
+      _ttsSpeakNext(lang, effRate);
     }, 90);
   } catch (e) { console.error(e); }
 }
@@ -733,6 +753,7 @@ function Header({ stats, wordsCount, settings, saveSettings }) {
   const [saved, setSaved] = useState(false);
   const [voices, setVoices] = useState(() => getTtsVoices());
   const [voiceURI, setVoiceURI] = useState(() => (getTtsSelected()?.voiceURI || ''));
+  const [ttsRate, setTtsRateState] = useState(() => (settings?.ttsRate || 0.95));
 
   useEffect(() => {
     const cur = getApiKey();
@@ -751,14 +772,26 @@ function Header({ stats, wordsCount, settings, saveSettings }) {
       setTtsVoiceURI(settings.ttsVoiceURI);
       setVoiceURI(settings.ttsVoiceURI);
     }
-  }, [settings?.ttsVoiceURI]);
+    if (settings?.ttsRate && settings.ttsRate !== ttsRate) {
+      setTtsRateState(settings.ttsRate);
+      setTtsRateDefault(settings.ttsRate);
+    }
+  }, [settings?.ttsVoiceURI, settings?.ttsRate]);
 
   const onPickVoice = (uri) => {
     setVoiceURI(uri);
     setTtsVoiceURI(uri);
     if (saveSettings) saveSettings({ ...(settings || {}), ttsVoiceURI: uri });
   };
-  const onSampleVoice = () => speak('Hello — this is a sample of the selected English voice.', 'en-US', 0.95);
+  const onPickRate = (r) => {
+    setTtsRateState(r);
+    setTtsRateDefault(r);
+    if (saveSettings) saveSettings({ ...(settings || {}), ttsRate: r });
+  };
+  const onSampleVoice = () => speak(
+    'This contract shall be governed by the applicable laws of the jurisdiction in which it was executed.',
+    'en-US', ttsRate
+  );
   const enVoices = voices.filter(v => /^en[-_]/i.test(v.lang));
 
   const onSave = () => {
@@ -910,13 +943,38 @@ function Header({ stats, wordsCount, settings, saveSettings }) {
                   >
                     {enVoices.map(v => (
                       <option key={v.voiceURI} value={v.voiceURI}>
-                        {v.name} — {v.lang}{v.localService ? '' : ' · cloud'}
+                        {isNaturalVoice(v) ? '⭐ ' : ''}{v.name} — {v.lang}{v.localService ? '' : ' · cloud'}
                       </option>
                     ))}
                   </select>
-                  <div style={{ display: 'flex', gap: '6px', marginTop: '10px', flexWrap: 'wrap' }}>
+
+                  <div style={{ marginTop: '14px' }}>
+                    <label style={T.label}>سرعة القراءة: {ttsRate.toFixed(2)}×</label>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {[0.70, 0.85, 0.95, 1.00].map(r => (
+                        <button key={r} onClick={() => onPickRate(r)}
+                          style={btn(Math.abs(ttsRate - r) < 0.01 ? 'amber' : 'secondary', 'sm')}>
+                          {r === 0.70 ? 'بطيء' : r === 0.85 ? 'متوسط' : r === 0.95 ? 'طبيعي' : 'سريع'} ({r.toFixed(2)}×)
+                        </button>
+                      ))}
+                    </div>
+                    <input
+                      type="range"
+                      min="0.5" max="1.5" step="0.05"
+                      value={ttsRate}
+                      onChange={(e) => onPickRate(Number(e.target.value))}
+                      style={{
+                        width: '100%',
+                        marginTop: '8px',
+                        accentColor: AMBER.text,
+                        direction: 'ltr',
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '6px', marginTop: '12px', flexWrap: 'wrap' }}>
                     <button onClick={onSampleVoice} style={btn('amber', 'sm')}>
-                      <Volume2 size={14} /> استمع لعينة
+                      <Volume2 size={14} /> استمع لعينة قانونية
                     </button>
                     <button onClick={stopSpeaking} style={btn('secondary', 'sm')}>
                       <Square size={14} /> أوقف
