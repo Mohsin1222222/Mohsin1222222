@@ -331,6 +331,23 @@ function extractJSON(text) {
   return null;
 }
 
+/* ---------- Unified AI error mapping ---------- */
+function handleAIError(e, fallback = 'تعذّر الاتصال بالذكاء — حاول مجدداً') {
+  if (!e) return fallback;
+  if (e.code === 'NO_API_KEY') return 'أدخل مفتاح API من زر الإعدادات في الأعلى';
+  if (e.code === 'INVALID_KEY') return 'مفتاح API غير صالح — راجع الإعدادات';
+  if (e.code === 'API_ERROR') {
+    const msg = (e.message || '').toLowerCase();
+    if (msg.includes('429') || msg.includes('rate')) return 'تم تجاوز حدّ الاستخدام — انتظر دقيقة ثم حاول مجدداً';
+    if (msg.includes('overloaded') || msg.includes('529')) return 'خوادم Claude مزدحمة الآن — أعد المحاولة بعد لحظات';
+    if (msg.includes('500') || msg.includes('502') || msg.includes('503')) return 'خطأ مؤقت في الخادم — أعد المحاولة';
+    return e.message ? `خطأ من الـ API: ${e.message}` : fallback;
+  }
+  if (e.message === 'parse') return 'استجابة الذكاء جاءت بصيغة غير متوقعة — حاول مجدداً';
+  if ((e.message || '').toLowerCase().includes('failed to fetch')) return 'تعذّر الاتصال بالشبكة — تحقق من الإنترنت';
+  return e.message ? `${fallback} (${e.message})` : fallback;
+}
+
 /* ---------- TTS ---------- */
 const _tts = {
   voices: [],
@@ -2365,9 +2382,9 @@ Return ONLY JSON:
 }`;
       const t = await callAI(prompt);
       const obj = extractJSON(t);
-      if (!obj || !obj.topic) throw new Error();
+      if (!obj || !obj.topic) throw new Error('parse');
       setTopic(obj);
-    } catch { setErr('تعذّر توليد موضوع'); }
+    } catch (e) { setErr(handleAIError(e, 'تعذّر توليد موضوع')); }
     finally { setLoadingTopic(false); }
   };
 
@@ -2395,9 +2412,9 @@ Return ONLY JSON:
 }`;
       const t = await callAI(prompt);
       const obj = extractJSON(t);
-      if (!obj) throw new Error();
+      if (!obj) throw new Error('parse');
       setEvaluation(obj);
-    } catch { setErr('تعذّر التقييم'); }
+    } catch (e) { setErr(handleAIError(e, 'تعذّر التقييم')); }
     finally { setLoadingEval(false); }
   };
 
@@ -2513,9 +2530,9 @@ Return ONLY JSON:
 }`;
       const t = await callAI(prompt);
       const obj = extractJSON(t);
-      if (!obj || !obj.story) throw new Error();
+      if (!obj || !obj.story) throw new Error('parse');
       setStory(obj);
-    } catch { setErr('تعذّر التوليد'); }
+    } catch (e) { setErr(handleAIError(e, 'تعذّر التوليد')); }
     finally { setLoading1(false); }
   };
 
@@ -2540,9 +2557,9 @@ Evaluate it. Return ONLY JSON:
 }`;
       const t = await callAI(prompt);
       const obj = extractJSON(t);
-      if (!obj) throw new Error();
+      if (!obj) throw new Error('parse');
       setFeedback(obj);
-    } catch { setErr('تعذّر التقييم'); }
+    } catch (e) { setErr(handleAIError(e, 'تعذّر التقييم')); }
     finally { setLoading2(false); }
   };
 
@@ -2620,9 +2637,10 @@ function ParaphraseMode() {
   const [evalRes, setEvalRes] = useState(null);
   const [loading1, setLoading1] = useState(false);
   const [loading2, setLoading2] = useState(false);
+  const [err, setErr] = useState('');
 
   const newSentence = async () => {
-    setLoading1(true); setEvalRes(null); setUserText('');
+    setLoading1(true); setErr(''); setEvalRes(null); setUserText('');
     try {
       const prompt =
 `Give ONE English sentence at B2 level (15-25 words) for paraphrasing practice.
@@ -2631,13 +2649,15 @@ Return ONLY JSON:
 { "sentence": "...", "ar": "ترجمة عربية", "hintAr": "تلميح للصياغة بطريقة مختلفة" }`;
       const t = await callAI(prompt);
       const obj = extractJSON(t);
-      if (obj && obj.sentence) setOriginal(obj);
-    } finally { setLoading1(false); }
+      if (!obj || !obj.sentence) throw new Error('parse');
+      setOriginal(obj);
+    } catch (e) { setErr(handleAIError(e, 'تعذّر توليد جملة')); }
+    finally { setLoading1(false); }
   };
 
   const evaluate = async () => {
     if (!userText.trim() || !original) return;
-    setLoading2(true);
+    setLoading2(true); setErr('');
     try {
       const prompt =
 `Original: "${original.sentence}"
@@ -2655,8 +2675,10 @@ Return ONLY JSON:
 }`;
       const t = await callAI(prompt);
       const obj = extractJSON(t);
-      if (obj) setEvalRes(obj);
-    } finally { setLoading2(false); }
+      if (!obj) throw new Error('parse');
+      setEvalRes(obj);
+    } catch (e) { setErr(handleAIError(e, 'تعذّر التقييم')); }
+    finally { setLoading2(false); }
   };
 
   return (
@@ -2684,6 +2706,7 @@ Return ONLY JSON:
       <button onClick={evaluate} disabled={!userText.trim() || !original || loading2} style={{ ...btn('primary', 'md'), marginTop: '8px' }}>
         {loading2 ? <Spinner size={14} /> : <Send size={14} />} قيّم
       </button>
+      {err && <div style={{ color: 'var(--color-text-danger, #B91C1C)', marginTop: '8px', fontSize: '13px' }}>{err}</div>}
 
       {evalRes && (
         <div style={{ ...T.cardInner, marginTop: '12px' }}>
@@ -3317,9 +3340,10 @@ function ShadowingMode({ words }) {
   const [phrase, setPhrase] = useState(null);
   const [loading, setLoading] = useState(false);
   const [rate, setRate] = useState(0.85);
+  const [err, setErr] = useState('');
 
   const fetchPhrase = async () => {
-    setLoading(true);
+    setLoading(true); setErr('');
     try {
       const sample = shuffle(words).slice(0, 5).map(w => w.word);
       const prompt =
@@ -3329,23 +3353,28 @@ ${sample.length ? `Bonus if it naturally uses one of: ${JSON.stringify(sample)}.
 Return ONLY JSON: { "sentence": "...", "ar": "ترجمة", "noteAr": "ملاحظة عن الإيقاع أو النبر" }`;
       const t = await callAI(prompt);
       const obj = extractJSON(t);
-      if (obj && obj.sentence) setPhrase(obj);
-    } finally { setLoading(false); }
+      if (!obj || !obj.sentence) throw new Error('parse');
+      setPhrase(obj);
+    } catch (e) { setErr(handleAIError(e, 'تعذّر جلب جملة')); }
+    finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchPhrase(); }, []); // eslint-disable-line
+  // No auto-fetch: user explicitly clicks to start.
+  useEffect(() => () => { stopSpeaking(); }, []);
 
   return (
     <div style={T.card}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
         <h2 style={T.h2}>التقليد (Shadowing)</h2>
         <button onClick={fetchPhrase} disabled={loading} style={btn('amber', 'sm')}>
-          {loading ? <Spinner size={14} /> : <RefreshCw size={14} />} جملة جديدة
+          {loading ? <Spinner size={14} /> : <RefreshCw size={14} />} {phrase ? 'جملة جديدة' : 'ابدأ'}
         </button>
       </div>
       <div style={{ ...T.muted, marginTop: '4px', marginBottom: '12px' }}>
         استمع، ثم كرّر بنفس الإيقاع والنغمة. ابدأ بسرعة بطيئة وارفعها تدريجياً.
       </div>
+
+      {err && <div style={{ color: 'var(--color-text-danger, #B91C1C)', marginBottom: '10px', fontSize: '13px' }}>{err}</div>}
 
       {phrase ? (
         <div style={{ ...T.cardInner, background: AMBER.bg, borderColor: AMBER.border, marginBottom: '12px' }}>
@@ -3353,24 +3382,28 @@ Return ONLY JSON: { "sentence": "...", "ar": "ترجمة", "noteAr": "ملاحظ
           <div style={{ color: AMBER.text, fontSize: '13px', marginTop: '4px' }}>{phrase.ar}</div>
           {phrase.noteAr && <div style={{ color: AMBER.text, fontSize: '12px', marginTop: '6px' }}>💡 {phrase.noteAr}</div>}
         </div>
-      ) : (
-        <div style={{ ...T.muted, textAlign: 'center', padding: '20px' }}>جاري التحميل...</div>
+      ) : !loading && !err && (
+        <div style={{ ...T.cardInner, textAlign: 'center', padding: '20px', color: 'var(--color-text-secondary)' }}>
+          اضغط «ابدأ» في الأعلى لتوليد جملة للتقليد.
+        </div>
       )}
 
-      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
-        <span style={T.muted}>السرعة:</span>
-        {[0.65, 0.85, 1.0].map(r => (
-          <button key={r} onClick={() => setRate(r)} style={btn(rate === r ? 'amber' : 'secondary', 'sm')}>
-            {r === 0.65 ? 'بطيء' : r === 0.85 ? 'متوسط' : 'طبيعي'}
+      {phrase && (
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={T.muted}>السرعة:</span>
+          {[0.65, 0.85, 1.0].map(r => (
+            <button key={r} onClick={() => setRate(r)} style={btn(rate === r ? 'amber' : 'secondary', 'sm')}>
+              {r === 0.65 ? 'بطيء' : r === 0.85 ? 'متوسط' : 'طبيعي'}
+            </button>
+          ))}
+          <button onClick={() => speak(phrase.sentence, 'en-US', rate)} style={btn('primary', 'md')}>
+            <Play size={14} /> استمع
           </button>
-        ))}
-        <button disabled={!phrase} onClick={() => speak(phrase.sentence, 'en-US', rate)} style={btn('primary', 'md')}>
-          <Play size={14} /> استمع
-        </button>
-        <button onClick={stopSpeaking} style={btn('secondary', 'md')}>
-          <Square size={14} /> أوقف
-        </button>
-      </div>
+          <button onClick={stopSpeaking} style={btn('secondary', 'md')}>
+            <Square size={14} /> أوقف
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -3396,12 +3429,13 @@ function PronunciationMode({ words }) {
         const prompt = `Give one English sentence (10-18 words, B2). Return JSON: {"sentence":"...","ar":"..."}`;
         const t = await callAI(prompt);
         const obj = extractJSON(t);
-        if (obj && obj.sentence) setTarget(obj);
+        if (!obj || !obj.sentence) throw new Error('parse');
+        setTarget(obj);
       }
-    } finally { setLoading(false); }
+    } catch (e) { setErr(handleAIError(e, 'تعذّر جلب جملة')); }
+    finally { setLoading(false); }
   };
-
-  useEffect(() => { fetchTarget(); }, []); // eslint-disable-line
+  // No auto-fetch: user starts via the button.
 
   const finalRef = useRef('');
   const startRec = () => {
@@ -3420,11 +3454,11 @@ function PronunciationMode({ words }) {
     c.start();
   };
   const stopRec = () => { try { recRef.current?.stop(); } catch {} setListening(false); };
-  useEffect(() => () => { try { recRef.current?.stop(); } catch {} }, []);
+  useEffect(() => () => { try { recRef.current?.stop(); } catch {} stopSpeaking(); }, []);
 
   const evaluatePronunciation = async () => {
     if (!transcript.trim() || !target) return;
-    setEvalLoading(true);
+    setEvalLoading(true); setErr('');
     try {
       const prompt =
 `Target sentence: "${target.sentence}"
@@ -3442,8 +3476,10 @@ Return ONLY JSON:
 }`;
       const t = await callAI(prompt);
       const obj = extractJSON(t);
-      if (obj) setFeedback(obj);
-    } finally { setEvalLoading(false); }
+      if (!obj) throw new Error('parse');
+      setFeedback(obj);
+    } catch (e) { setErr(handleAIError(e, 'تعذّر تقييم النطق')); }
+    finally { setEvalLoading(false); }
   };
 
   return (
@@ -3452,12 +3488,18 @@ Return ONLY JSON:
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
         <h2 style={T.h2}>تقييم النطق</h2>
         <button onClick={fetchTarget} disabled={loading} style={btn('amber', 'sm')}>
-          {loading ? <Spinner size={14} /> : <RefreshCw size={14} />} جملة أخرى
+          {loading ? <Spinner size={14} /> : <RefreshCw size={14} />} {target ? 'جملة أخرى' : 'ابدأ'}
         </button>
       </div>
       <div style={{ ...T.muted, marginTop: '4px', marginBottom: '12px' }}>
         استمع، ثم سجّل نفسك تنطق نفس الجملة. يقارن الذكاء بين النص المسموع والمتعرَّف.
       </div>
+
+      {!target && !loading && (
+        <div style={{ ...T.cardInner, textAlign: 'center', padding: '20px', color: 'var(--color-text-secondary)', marginBottom: '12px' }}>
+          اضغط «ابدأ» في الأعلى لجلب جملة تدريبية.
+        </div>
+      )}
 
       {target && (
         <div style={{ ...T.cardInner, background: AMBER.bg, borderColor: AMBER.border, marginBottom: '12px' }}>
@@ -3551,15 +3593,15 @@ Return ONLY JSON:
 }`;
       const t = await callAI(prompt);
       const obj = extractJSON(t);
-      if (obj) {
-        setScenario(obj);
-        setHistory([{ role: 'ai', text: obj.opening }]);
-      }
-    } catch { setErr('فشل توليد سيناريو'); }
+      if (!obj) throw new Error('parse');
+      setScenario(obj);
+      setHistory([{ role: 'ai', text: obj.opening }]);
+      if (obj.opening) speak(obj.opening);
+    } catch (e) { setErr(handleAIError(e, 'فشل توليد سيناريو')); }
     finally { setLoading(false); }
   };
 
-  useEffect(() => { newScenario(); }, []); // eslint-disable-line
+  // No auto-fetch: user starts via the button.
 
   const send = async () => {
     if (!input.trim() || !scenario) return;
@@ -3585,11 +3627,10 @@ Return ONLY JSON:
 }`;
       const t = await callAI(prompt);
       const obj = extractJSON(t);
-      if (obj) {
-        setHistory([...newHistory, { role: 'ai', text: obj.reply, tip: obj.tipAr }]);
-        speak(obj.reply);
-      }
-    } catch { setErr('تعذّر الرد'); }
+      if (!obj) throw new Error('parse');
+      setHistory([...newHistory, { role: 'ai', text: obj.reply, tip: obj.tipAr }]);
+      speak(obj.reply);
+    } catch (e) { setErr(handleAIError(e, 'تعذّر الرد')); }
     finally { setLoading(false); }
   };
 
@@ -3614,7 +3655,7 @@ Return ONLY JSON:
     c.start();
   };
   const stopRec = () => { try { recRef.current?.stop(); } catch {} setListening(false); };
-  useEffect(() => () => { try { recRef.current?.stop(); } catch {} }, []);
+  useEffect(() => () => { try { recRef.current?.stop(); } catch {} stopSpeaking(); }, []);
 
   return (
     <div style={T.card}>
@@ -3622,9 +3663,15 @@ Return ONLY JSON:
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
         <h2 style={T.h2}>سيناريو محادثة</h2>
         <button onClick={newScenario} disabled={loading} style={btn('amber', 'sm')}>
-          {loading ? <Spinner size={14} /> : <RefreshCw size={14} />} سيناريو جديد
+          {loading ? <Spinner size={14} /> : <RefreshCw size={14} />} {scenario ? 'سيناريو جديد' : 'ابدأ'}
         </button>
       </div>
+
+      {!scenario && !loading && (
+        <div style={{ ...T.cardInner, textAlign: 'center', padding: '20px', color: 'var(--color-text-secondary)', marginTop: '10px' }}>
+          اضغط «ابدأ» لتوليد سيناريو محادثة عشوائي.
+        </div>
+      )}
 
       {scenario && (
         <div style={{ ...T.cardInner, background: AMBER.bg, borderColor: AMBER.border, marginTop: '10px', marginBottom: '10px' }}>
@@ -3925,9 +3972,9 @@ Return ONLY JSON:
 }`;
       const t = await callAI(prompt);
       const obj = extractJSON(t);
-      if (!obj || !obj.passage) throw new Error();
+      if (!obj || !obj.passage) throw new Error('parse');
       setContent(obj);
-    } catch { setErr('تعذّر التوليد'); }
+    } catch (e) { setErr(handleAIError(e, 'تعذّر التوليد')); }
     finally { setLoading(false); }
   };
 
@@ -4765,14 +4812,12 @@ Return ONLY JSON:
   "anglesAr": ["زاوية اقتراحية بالعربية 1","2","3"],
   "usefulPhrases": ["B2 English phrase or collocation that fits","..."]
 }`;
-      const text = await callAI(p, null, 1000);
-      const obj = extractJSON(text);
+      const responseText = await callAI(p, null, 1000);
+      const obj = extractJSON(responseText);
       if (!obj || !obj.promptEn) throw new Error('parse');
       setPrompt(obj);
     } catch (e) {
-      if (e.code === 'NO_API_KEY') setErr('أدخل مفتاح API من زر الإعدادات');
-      else if (e.code === 'INVALID_KEY') setErr('مفتاح API غير صالح');
-      else setErr('تعذّر توليد اقتراح — حاول مجدداً');
+      setErr(handleAIError(e, 'تعذّر توليد اقتراح — حاول مجدداً'));
     } finally { setLoadingPrompt(false); }
   };
 
@@ -4824,14 +4869,12 @@ Return ONLY JSON:
   "polishedVersion": "a polished English version preserving the writer's voice",
   "encouragementAr": "رسالة تشجيعية قصيرة بالعربية"
 }`;
-      const text2 = await callAI(p, null, 2000);
-      const obj = extractJSON(text2);
+      const responseText = await callAI(p, null, 2000);
+      const obj = extractJSON(responseText);
       if (!obj) throw new Error('parse');
       setEvaluation(obj);
     } catch (e) {
-      if (e.code === 'NO_API_KEY') setErr('أدخل مفتاح API من زر الإعدادات');
-      else if (e.code === 'INVALID_KEY') setErr('مفتاح API غير صالح');
-      else setErr('تعذّر التقييم — حاول مجدداً');
+      setErr(handleAIError(e, 'تعذّر التقييم — حاول مجدداً'));
     } finally { setLoadingEval(false); }
   };
 
